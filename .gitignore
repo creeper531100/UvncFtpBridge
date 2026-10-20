@@ -2,5 +2,6 @@ bin/
 obj/
 dist/
 .portable-cache/
+.vs/
 __pycache__/
 *.user
