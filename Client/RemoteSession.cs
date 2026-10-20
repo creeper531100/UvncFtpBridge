@@ -9,6 +9,7 @@ namespace UvncFtpBridge.Client;
 public sealed class RemoteSession : IDisposable
 {
     readonly string _password;
+    readonly Socks5Proxy? _proxy;
     RfbConnection? _conn;
     UvncFileTransfer? _ft;
 
@@ -17,10 +18,11 @@ public sealed class RemoteSession : IDisposable
     public string DesktopName => _conn?.DesktopName ?? "";
     public bool IsConnected => _conn?.IsAlive == true;
 
-    public RemoteSession(string hostSpec, int defaultPort, string password)
+    public RemoteSession(string hostSpec, int defaultPort, string password, Socks5Proxy? proxy = null)
     {
         (Host, Port) = ParseHost(hostSpec, defaultPort);
         _password = password;
+        _proxy = proxy;
     }
 
     /// <summary>"192.168.0.10" 或 "192.168.0.10:5901"。</summary>
@@ -44,7 +46,7 @@ public sealed class RemoteSession : IDisposable
         if (_conn is { IsAlive: true }) return;
         Drop();
         Log.Debug($"連線到 {Host}:{Port}");
-        var conn = RfbConnection.Connect(Host, Port, _password);
+        var conn = RfbConnection.Connect(Host, Port, _password, proxy: _proxy);
         try
         {
             var ft = new UvncFileTransfer(conn);

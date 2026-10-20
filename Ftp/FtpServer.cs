@@ -1,14 +1,16 @@
 using System.Net;
 using System.Net.Sockets;
+using UvncFtpBridge.Rfb;
 
 namespace UvncFtpBridge.Ftp;
 
 /// <summary>最精簡的 FTP 伺服器，只監聽在 127.0.0.1。每條連線各開一條執行緒。</summary>
-public sealed class FtpServer(IPAddress bindAddress, int port, int defaultVncPort, string? targetHost = null)
+public sealed class FtpServer(IPAddress bindAddress, int port, int defaultVncPort, string? targetHost = null, Socks5Proxy? proxy = null)
 {
     readonly TcpListener _listener = new(bindAddress, port);
     public int DefaultVncPort { get; } = defaultVncPort;
     public string? TargetHost { get; } = targetHost;
+    public Socks5Proxy? Proxy { get; } = proxy;
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
     bool _started;
@@ -20,6 +22,7 @@ public sealed class FtpServer(IPAddress bindAddress, int port, int defaultVncPor
         _listener.Start();
         _started = true;
         Log.Info($"FTP 橋接已啟動，監聽 {bindAddress}:{Port}");
+        if (Proxy != null) Log.Info($"VNC 連線經由 SOCKS5 {Proxy.Host}:{Proxy.Port}。");
         if (TargetHost != null) Log.Info($"機台目標 {TargetHost}:{DefaultVncPort}（由 WinSCP 工作階段指定）。");
     }
 

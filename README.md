@@ -4,7 +4,7 @@
 
 ## 給其他事業處使用
 
-分享 `dist/UltraVNC-WinSCP-Portable.zip`，對方使用 Windows x64，完整解壓縮到可寫入的資料夾後：
+分享 `dist/UltraVNC-WinSCP-FileTunnel-Portable.zip`，對方使用 Windows x64，完整解壓縮到可寫入的資料夾後：
 
 1. 雙擊 **Start-WinSCP.vbs**，自動開啟 WinSCP 與隱藏的 CLI 橋接。
 2. 在新增站台填 **真實機台 IP**、**VNC 埠**（預設 5900）、**VNC 密碼**，按登入。
@@ -16,7 +16,7 @@
 
 ### 精簡版（不包含 .NET 執行階段）
 
-另外提供 `dist/UltraVNC-WinSCP-Portable-FrameworkDependent/` 與同名 ZIP。雙擊入口、代理設定與站台儲存方式相同，但使用電腦需先安裝 **.NET 9 Runtime x64**，不用 SDK。下載：https://dotnet.microsoft.com/en-us/download/dotnet/9.0
+另外提供 `dist/UltraVNC-WinSCP-FileTunnel-Portable-FrameworkDependent/` 與同名 ZIP。雙擊入口、代理設定與站台儲存方式相同，但使用電腦需先安裝 **.NET 9 Runtime x64**，不用 SDK。下載：https://dotnet.microsoft.com/en-us/download/dotnet/9.0
 
 精簡版的 EXE、DLL、`.deps.json` 與 `.runtimeconfig.json` 必須一起保留。單獨 CLI 建置則在 `dist/FrameworkDependent/`。原本的自含套件仍保留。
 
@@ -31,6 +31,23 @@ WinSCP 主機欄：機台真實 IP / VNC 埠
         ↓ UltraVNC RFB 檔案傳輸
 機台 UltraVNC Server
 ```
+
+### 經 File-Tunnel 與 RDP 磁碟重新導向連內網機台
+
+完整步驟見 [File-Tunnel 部署教學](DEPLOY-FILE-TUNNEL.zh-TW.md)。File-Tunnel 使用 RDP 已提供的本機磁碟重新導向，無須註冊 mstsc 外掛；本機與跳板各執行一份官方 `ft.exe`。
+
+1. 本機雙擊 **Start-WinSCP-FileTunnel.vbs**（或 `.cmd`）。WinSCP 立即開啟，本機 SOCKS5 `127.0.0.1:1081` 等待跳板。
+2. 自行用 mstsc 連到這次的跳板，連線設定須勾選本機 C 槽重新導向。
+3. 在跳板執行 **Start-FileTunnel-Remote.cmd**（與 `ft.exe` 放同一資料夾）。保持視窗開啟。
+4. WinSCP 站台填**目標機台的真實 IP、VNC 埠與密碼**，按登入。
+
+```text
+WinSCP（真實機台 IP）→ 本機 FTP 橋接 → 本機 File-Tunnel SOCKS5
+    → \\tsclient\C\... 共用檔案 → 跳板 File-Tunnel → 機台 UltraVNC Server
+```
+
+啟動檔不指定跳板 IP，也不自動開 RDP。僅 VNC TCP 連線經 SOCKS5；WinSCP 到橋接程式的 FTP 維持在本機。代理、磁碟重新導向或跳板不可用時會報錯，**不會自動直連機台**。一般 CLI 或手動 `--ftp` 模式仍可透過 `UVNC_SOCKS5_PROXY` 指定 SOCKS5 代理。
+要走原本直連，使用 `Start-WinSCP.vbs`／`.cmd`，且不要設定該環境變數。
 
 CLI 啟動時自動更新 INI 的本機代理埠，包含原先儲存的 UltraVNC FTP 站台；主機 IP 與 VNC 密碼仍由 WinSCP 管理。各套件使用獨立可用埠，不會占用固定 2221 或與手動橋接衝突。關閉這份 WinSCP 時，CLI 橋接一起結束。同一份資料夾同時只啟動一個實例，可在 WinSCP 內開多個站台。
 
@@ -86,7 +103,7 @@ UvncFtpBridge winscp
 
 ```powershell
 .\dist\UvncFtpBridge.exe --selftest
-python tests/integration.py --bridge dist/UvncFtpBridge.exe --winscp dist/UltraVNC-WinSCP-Portable/WinSCP/WinSCP.com
+python tests/integration.py --bridge dist/UvncFtpBridge.exe --winscp dist/UltraVNC-WinSCP-FileTunnel-Portable/WinSCP/WinSCP.com
 python tests/portable.py
 ```
 

@@ -1,9 +1,9 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$FrameworkDependent)
 $ErrorActionPreference = 'Stop'
 $rootPath = $PSScriptRoot
 $cachePath = Join-Path $rootPath '.portable-cache'
-$packageName = if ($FrameworkDependent) { 'UltraVNC-WinSCP-Portable-FrameworkDependent' } else { 'UltraVNC-WinSCP-Portable' }
+$packageName = if ($FrameworkDependent) { 'UltraVNC-WinSCP-FileTunnel-Portable-FrameworkDependent' } else { 'UltraVNC-WinSCP-FileTunnel-Portable' }
 $packagePath = Join-Path $rootPath "dist\$packageName"
 $clientPath = Join-Path $packagePath 'WinSCP'
 $version = '6.7'
@@ -28,6 +28,16 @@ if (-not (Test-Path -LiteralPath $translationZip)) {
     Invoke-WebRequest -Uri "https://winscp.net/translations/dll/$version/ch.zip" -OutFile $translationZip
 }
 Expand-Archive -LiteralPath $translationZip -DestinationPath $clientPath -Force
+$ftVersion = 'v3.5.5'
+$ftHash = '25A5A7A248522B2F8FD310CCD7BC627A26F363D551C66162EF47DDD7BB9588C2'
+$ftCache = Join-Path $cachePath "ft-$ftVersion-win-x64.exe"
+if (-not (Test-Path -LiteralPath $ftCache)) {
+    Invoke-WebRequest -Uri "https://github.com/fiddyschmitt/File-Tunnel/releases/download/$ftVersion/ft-win-x64.exe" -OutFile $ftCache
+}
+if ((Get-FileHash -LiteralPath $ftCache -Algorithm SHA256).Hash -ne $ftHash) {
+    throw 'File-Tunnel SHA-256 does not match the pinned release checksum.'
+}
+Copy-Item -LiteralPath $ftCache -Destination (Join-Path $packagePath 'ft.exe') -Force
 & (Join-Path $rootPath 'Build-CLI.ps1') -FrameworkDependent:$FrameworkDependent
 $cliFiles = @(if ($FrameworkDependent) {
     Get-ChildItem -LiteralPath (Join-Path $rootPath 'dist\FrameworkDependent') -File
@@ -36,7 +46,7 @@ $cliFiles = @(if ($FrameworkDependent) {
 })
 foreach ($cliFile in $cliFiles) { Copy-Item -LiteralPath $cliFile.FullName -Destination $packagePath }
 Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\WinSCP.ini') -Destination $clientPath
-foreach ($item in @('Start-WinSCP.vbs','Start-WinSCP.cmd','使用說明.txt','ThirdParty.txt')) {
+foreach ($item in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','Start-FileTunnel-Remote.ps1','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath
 }
 if ($FrameworkDependent) {
@@ -50,8 +60,14 @@ $distributionZip = Join-Path $rootPath "dist\$packageName.zip"
 $files = @(
     (Join-Path $packagePath 'Start-WinSCP.vbs'),
     (Join-Path $packagePath 'Start-WinSCP.cmd'),
+    (Join-Path $packagePath 'Start-WinSCP-FileTunnel.vbs'),
+    (Join-Path $packagePath 'Start-WinSCP-FileTunnel.cmd'),
+    (Join-Path $packagePath 'Start-FileTunnel-Remote.cmd'),
+    (Join-Path $packagePath 'Start-FileTunnel-Remote.ps1'),
     (Join-Path $packagePath '使用說明.txt'),
     (Join-Path $packagePath 'ThirdParty.txt'),
+    (Join-Path $packagePath 'File-Tunnel-LICENSE.md'),
+    (Join-Path $packagePath 'ft.exe'),
     $clientPath
 )
 $files += @($cliFiles | ForEach-Object { Join-Path $packagePath $_.Name })

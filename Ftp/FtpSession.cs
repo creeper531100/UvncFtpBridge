@@ -121,7 +121,7 @@ public sealed class FtpSession(TcpClient control, FtpServer server)
             _authed = false;
             _vnc?.Dispose(); _vnc = null; _ft = null;
             Log.Info($"連線到機台 {host}:{vncPort} …");
-            _vnc = RfbConnection.Connect(host, vncPort, password);
+            _vnc = RfbConnection.Connect(host, vncPort, password, proxy: _server.Proxy);
             _ft = new UvncFileTransfer(_vnc);
             _ft.RequestAccess();
             _authed = true;

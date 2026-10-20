@@ -9,6 +9,16 @@ UltraVNC 檔案傳輸 — WinSCP 可攜套件
 
 若電腦禁止執行 VBS，改雙擊 Start-WinSCP.cmd；功能相同，會多顯示命令列視窗。
 請從上述啟動檔開啟，讓 CLI 同時啟動；不要直接開 WinSCP 子資料夾的 EXE。
+
+若要透過 RDP 跳板：
+1. 本機雙擊 Start-WinSCP-FileTunnel.vbs（或 .cmd）。WinSCP 先開啟，本機 File-Tunnel 同時在背景等待跳板。它不會指定跳板 IP，也不會替你開 RDP。
+2. 用 mstsc 連這次要用的跳板。連線前在「顯示選項 → 本機資源 → 詳細資料」勾選本機 C 槽；如果已有 RDP 工作階段，請斷線後重連才會生效。
+3. 把 ft.exe、Start-FileTunnel-Remote.cmd 與 Start-FileTunnel-Remote.ps1 複製到跳板的同一資料夾，雙擊遠端 CMD；保持黑色視窗開著。若本機系統磁碟不是 C，從命令列給它其他磁碟代號，例如 Start-FileTunnel-Remote.cmd D。
+4. 在本機 WinSCP 填目標機台的真實 IP、VNC 埠及密碼，按登入。若先按登入而失敗，跳板端啟動後再按一次。
+資料檔只放在本機 %TEMP%\UvncFtpBridge\FileTunnel，關閉 WinSCP 後會嘗試清除。跳板端會從 \\tsclient\C 自動找出目前使用者的 TEMP 路徑；磁碟路徑沒有 $。若 TEMP 位置被自訂，請把完整重新導向路徑當作遠端 CMD 的參數。
+本機 File-Tunnel SOCKS5 只聽 127.0.0.1:1081；關閉由此入口開啟的 WinSCP 後，本機隧道一併結束；跳板端不會結束，會自動回到等待，下次在本機重開啟動檔即可接上。RDP 斷線重連後也會自動接回。不用時再自行關閉跳板端 CMD 視窗。
+一次只對應一個跳板；切換跳板時先關閉舊跳板端，再於新的跳板啟動。
+此入口只將 VNC 連線經 SOCKS5／共用檔案傳送；WinSCP 與橋接程式之間的 FTP 仍在本機。代理或跳板不可用時會報錯，不會自動改成直連。
 啟動失敗時可查看 Logs\launcher.log，或用 CMD 啟動檔查看錯誤。
 
 機台需開啟 UltraVNC File Transfer，並使用完整權限的 VNC 密碼。

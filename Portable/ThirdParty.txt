@@ -9,3 +9,10 @@ Portable ZIP SHA-256: fef88545873aca4b353ac322b1e2702f2feadf30758b713f5fc7e2bed6
 
 The separately bundled UvncFtpBridge CLI translates FTP requests to UltraVNC file transfers.
 The WinSCP executables have not been modified or rebuilt.
+
+File-Tunnel v3.5.5 (official, unmodified Windows x64 executable)
+Publisher: Fidel Perez-Smith
+Website: https://github.com/fiddyschmitt/File-Tunnel
+License: File-Tunnel-LICENSE.md (MIT)
+Portable download: https://github.com/fiddyschmitt/File-Tunnel/releases/download/v3.5.5/ft-win-x64.exe
+SHA-256: 25a5a7a248522b2f8fd310ccd7bc627a26f363d551c66162ef47ddd7bb9588c2

@@ -61,18 +61,13 @@ public sealed class RfbConnection : IDisposable
         _keepAlive = new Timer(_ => SendKeepAlive(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
-    public static RfbConnection Connect(string host, int port, string password, int timeoutMs = 15000)
+    public static RfbConnection Connect(string host, int port, string password, int timeoutMs = 15000, Socks5Proxy? proxy = null)
     {
         var tcp = new TcpClient { NoDelay = true };
         try
         {
-            if (!tcp.ConnectAsync(host, port).Wait(timeoutMs))
-                throw new VncException($"連不上 {host}:{port}（逾時）");
-        }
-        catch (AggregateException ex)
-        {
-            tcp.Dispose();
-            throw new VncException($"連不上 {host}:{port}：{ex.InnerException?.Message}");
+            if (proxy == null) ConnectTcp(tcp, host, port, timeoutMs, $"連不上 {host}:{port}");
+            else proxy.Connect(tcp, host, port, timeoutMs);
         }
         catch (VncException) { tcp.Dispose(); throw; }
         catch (Exception ex) { tcp.Dispose(); throw new VncException($"連不上 {host}:{port}：{ex.Message}"); }
@@ -90,6 +85,15 @@ public sealed class RfbConnection : IDisposable
             return c;
         }
         catch { c.Dispose(); throw; }
+    }
+
+    /// <summary>有逾時的 TCP 連線：逾時會真的取消還在進行的連線，失敗一律轉成 VncException。</summary>
+    internal static void ConnectTcp(TcpClient tcp, string host, int port, int timeoutMs, string failMessage)
+    {
+        using var timeout = new CancellationTokenSource(timeoutMs);
+        try { tcp.ConnectAsync(host, port, timeout.Token).AsTask().GetAwaiter().GetResult(); }
+        catch (OperationCanceledException) { throw new VncException($"{failMessage}（逾時）"); }
+        catch (SocketException ex) { throw new VncException($"{failMessage}：{ex.Message}"); }
     }
 
     // ---------------- 握手（標準 VNC 連線流程） ----------------

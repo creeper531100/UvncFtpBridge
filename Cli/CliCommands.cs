@@ -26,6 +26,10 @@ public static class CliCommands
         try { o = Parse(args.Skip(1).ToArray()); }
         catch (ArgumentException ex) { Console.Error.WriteLine("用法錯誤：" + ex.Message); return 2; }
 
+        Socks5Proxy? proxy;
+        try { proxy = Socks5Proxy.FromEnvironment(); }
+        catch (ArgumentException ex) { Console.Error.WriteLine("用法錯誤：" + ex.Message); return 2; }
+
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -33,12 +37,12 @@ public static class CliCommands
         {
             return cmd switch
             {
-                "ls" or "dir" => Need(o, 1, 2) ?? Ls(o),
-                "get" => Need(o, 2, 3) ?? Get(o, cts.Token),
-                "put" => Need(o, 3, 3) ?? Put(o, cts.Token),
-                "rm" or "del" => Need(o, 2, 2) ?? Simple(o, (ft, a) => { ft.Delete(a[0]); return $"已刪除 {a[0]}"; }),
-                "mkdir" => Need(o, 2, 2) ?? Simple(o, (ft, a) => { ft.MakeDirectory(a[0]); return $"已建立 {a[0]}"; }),
-                "mv" or "ren" => Need(o, 3, 3) ?? Simple(o, (ft, a) => { ft.Rename(a[0], a[1]); return $"已改名 {a[0]} -> {a[1]}"; }),
+                "ls" or "dir" => Need(o, 1, 2) ?? Ls(o, proxy),
+                "get" => Need(o, 2, 3) ?? Get(o, cts.Token, proxy),
+                "put" => Need(o, 3, 3) ?? Put(o, cts.Token, proxy),
+                "rm" or "del" => Need(o, 2, 2) ?? Simple(o, proxy, (ft, a) => { ft.Delete(a[0]); return $"已刪除 {a[0]}"; }),
+                "mkdir" => Need(o, 2, 2) ?? Simple(o, proxy, (ft, a) => { ft.MakeDirectory(a[0]); return $"已建立 {a[0]}"; }),
+                "mv" or "ren" => Need(o, 3, 3) ?? Simple(o, proxy, (ft, a) => { ft.Rename(a[0], a[1]); return $"已改名 {a[0]} -> {a[1]}"; }),
                 _ => Usage($"不認得的指令「{args[0]}」"),
             };
         }
@@ -88,10 +92,10 @@ public static class CliCommands
 
     // ---------------- 連線 ----------------
 
-    static RemoteSession Open(Options o)
+    static RemoteSession Open(Options o, Socks5Proxy? proxy)
     {
         string pw = o.Password ?? Environment.GetEnvironmentVariable("UVNC_PASSWORD") ?? PromptPassword();
-        var s = new RemoteSession(o.Pos[0], o.VncPort, pw);
+        var s = new RemoteSession(o.Pos[0], o.VncPort, pw, proxy);
         s.EnsureConnected();
         return s;
     }
@@ -115,9 +119,9 @@ public static class CliCommands
 
     // ---------------- ls ----------------
 
-    static int Ls(Options o)
+    static int Ls(Options o, Socks5Proxy? proxy)
     {
-        using var s = Open(o);
+        using var s = Open(o, proxy);
         string path = RemotePath.Normalize(o.Pos.Count > 1 ? o.Pos[1] : "");
         string? pattern = null;
         if (RemotePath.HasWildcard(RemotePath.Name(path)))
@@ -165,9 +169,9 @@ public static class CliCommands
 
     // ---------------- get ----------------
 
-    static int Get(Options o, CancellationToken ct)
+    static int Get(Options o, CancellationToken ct, Socks5Proxy? proxy)
     {
-        using var s = Open(o);
+        using var s = Open(o, proxy);
         string remoteRaw = o.Pos[1];
         string remote = RemotePath.Normalize(remoteRaw);
         string? localArg = o.Pos.Count > 2 ? o.Pos[2] : null;
@@ -256,9 +260,9 @@ public static class CliCommands
 
     // ---------------- put ----------------
 
-    static int Put(Options o, CancellationToken ct)
+    static int Put(Options o, CancellationToken ct, Socks5Proxy? proxy)
     {
-        using var s = Open(o);
+        using var s = Open(o, proxy);
         string localArg = o.Pos[1];
         string remoteRaw = o.Pos[2];
         string remote = RemotePath.Normalize(remoteRaw);
@@ -305,9 +309,9 @@ public static class CliCommands
 
     // ---------------- rm / mkdir / mv ----------------
 
-    static int Simple(Options o, Func<UvncFileTransfer, string[], string> act)
+    static int Simple(Options o, Socks5Proxy? proxy, Func<UvncFileTransfer, string[], string> act)
     {
-        using var s = Open(o);
+        using var s = Open(o, proxy);
         var a = o.Pos.Skip(1).Select(RemotePath.Normalize).ToArray();
         if (a.Any(p => p == "" || RemotePath.IsDriveRoot(p)))
             throw new VncException("不能對磁碟根目錄做這個操作。");
@@ -366,6 +370,7 @@ public static class CliCommands
           共用選項：
             -p, --password <密碼>  VNC 密碼（也可以用環境變數 UVNC_PASSWORD；都沒有就會問）
             --vnc-port <埠>        預設的 VNC 埠（預設 5900）
+            UVNC_SOCKS5_PROXY       設為 127.0.0.1:1080 時，VNC 連線經 SOCKS5 代理
             -r, --recursive        get/put 整個資料夾
             --json                 ls 用 JSON 輸出（給程式／AI 解析）
             -q, --quiet            不顯示進度
@@ -387,11 +392,13 @@ public static class CliCommands
           --target <機台IP>        固定目標（搭配 --vnc-port），USER 不再指定目標。
           --port 0                 由作業系統分配本機 FTP 埠。
           --ready-stdout           啟動後 stdout 輸出 UVNCFTP/1 <實際埠>。
+          UVNC_SOCKS5_PROXY       設為 127.0.0.1:1080 時，所有機台連線經 SOCKS5 代理。
           支援原版 WinSCP 的 USER %user@%host FTP 代理；目標由 WinSCP 主機欄指定。
 
         【WinSCP 可攜套件】
           UvncFtpBridge winscp       自動開啟 FTP 橋接與旁邊 WinSCP 資料夾的原版 WinSCP。
           已預設 FTP、VNC 埠及代理；在 WinSCP 填真實機台 IP 與 VNC 密碼即可。
+          若經 RDP 跳板使用 File-Tunnel，請從 Start-WinSCP-FileTunnel 啟動檔開啟。
 
         【其他】
           UvncFtpBridge --selftest   內建自我測試

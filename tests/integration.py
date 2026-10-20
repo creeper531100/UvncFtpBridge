@@ -7,7 +7,9 @@ import argparse
 import concurrent.futures
 import ftplib
 import io
+import os
 import pathlib
+import select
 import socket
 import struct
 import subprocess
@@ -174,9 +176,16 @@ class Machine:
 
 
 class Bridge:
-    def __init__(self, command, machine):
-        self.process = subprocess.Popen(command + ["--ftp", "--port", "0", "--target", "127.0.0.1",
-                                       "--vnc-port", str(machine.port), "--ready-stdout"],
+    def __init__(self, command, machine, proxy=None):
+        options = ["--ftp", "--port", "0", "--vnc-port", str(machine.port), "--ready-stdout"]
+        if proxy is None:
+            options += ["--target", "127.0.0.1"]
+        env = os.environ.copy()
+        env.pop("UVNC_SOCKS5_PROXY", None)
+        if proxy is not None:
+            env["UVNC_SOCKS5_PROXY"] = f"127.0.0.1:{proxy.port}"
+        self.process = subprocess.Popen(command + options,
+                                       env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
         self.logs = []
         threading.Thread(target=lambda: self.logs.extend(self.process.stderr), daemon=True).start()
@@ -195,6 +204,77 @@ class Bridge:
     def close(self):
         self.process.terminate()
         self.process.communicate(timeout=10)
+
+
+class SocksProxy:
+    """Mock SOCKS5 proxy: fake machine IPs resolve only through this proxy."""
+    def __init__(self, targets):
+        self.targets = targets
+        self.requests = []
+        self.errors = []
+        self.closed = False
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.port = self.listener.getsockname()[1]
+        self.listener.listen()
+        self.listener.settimeout(0.1)
+        self.thread = threading.Thread(target=self.accept, daemon=True)
+        self.thread.start()
+
+    def accept(self):
+        while not self.closed:
+            try:
+                conn, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            threading.Thread(target=self.serve, args=(conn,), daemon=True).start()
+
+    def serve(self, conn):
+        try:
+            with conn:
+                conn.settimeout(10)
+                version, count = exact(conn, 2)
+                assert version == 5 and 0 in exact(conn, count)
+                conn.sendall(b"\x05\x00")
+                version, command, reserved, kind = exact(conn, 4)
+                assert (version, command, reserved) == (5, 1, 0)
+                if kind == 1:
+                    host = socket.inet_ntop(socket.AF_INET, exact(conn, 4))
+                elif kind == 4:
+                    host = socket.inet_ntop(socket.AF_INET6, exact(conn, 16))
+                else:
+                    assert kind == 3
+                    host = exact(conn, exact(conn, 1)[0]).decode("ascii")
+                port = struct.unpack(">H", exact(conn, 2))[0]
+                self.requests.append((host, port))
+                target = self.targets.get((host, port))
+                if target is None:
+                    conn.sendall(b"\x05\x02\x00\x01" + bytes(6))
+                    return
+                with socket.create_connection(("127.0.0.1", target), timeout=10) as remote:
+                    conn.sendall(b"\x05\x00\x00\x01" + bytes(6))
+                    conn.settimeout(None)
+                    remote.settimeout(None)
+                    while True:
+                        readable, _, _ = select.select([conn, remote], [], [], 10)
+                        if not readable:
+                            continue
+                        for source in readable:
+                            data = source.recv(65536)
+                            if not data:
+                                return
+                            (remote if source is conn else conn).sendall(data)
+        except (EOFError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        except Exception as exc:
+            self.errors.append(repr(exc))
+
+    def close(self):
+        self.closed = True
+        self.listener.close()
+        self.thread.join(timeout=2)
 
 
 def run(command, winscp):
@@ -281,6 +361,44 @@ def run(command, winscp):
     finally:
         for bridge in bridges:
             bridge.close()
+        for machine in machines:
+            machine.close()
+
+    # The client sees real-looking addresses; the mock proxy alone maps them to RFB servers.
+    machines = [Machine("socks-A"), Machine("socks-B")]
+    proxy = SocksProxy({("203.0.113.11", machines[0].port): machines[0].port,
+                        ("203.0.113.12", machines[1].port): machines[1].port})
+    bridges = []
+    try:
+        bridges = [Bridge(command, machine, proxy) for machine in machines]
+        with bridges[0].ftp(f"203.0.113.11:{machines[0].port}") as first, \
+             bridges[1].ftp(f"203.0.113.12:{machines[1].port}") as second:
+            one, two = bytearray(), bytearray()
+            first.retrbinary("RETR /C:/hello.txt", one.extend)
+            second.retrbinary("RETR /C:/hello.txt", two.extend)
+            assert one == machines[0].files["C:\\hello.txt"]
+            assert two == machines[1].files["C:\\hello.txt"]
+        assert ("203.0.113.11", machines[0].port) in proxy.requests
+        assert ("203.0.113.12", machines[1].port) in proxy.requests
+        try:
+            with bridges[0].ftp(f"203.0.113.99:{machines[0].port}"):
+                raise AssertionError("SOCKS5 rejection should fail")
+        except ftplib.error_perm as exc:
+            assert str(exc).startswith("530"), exc
+        before = machines[0].connections
+        proxy.close()
+        try:
+            with bridges[0].ftp(f"127.0.0.1:{machines[0].port}"):
+                raise AssertionError("unavailable SOCKS5 proxy should not fall back to direct TCP")
+        except ftplib.error_perm as exc:
+            assert str(exc).startswith("530"), exc
+        assert machines[0].connections == before
+        assert not proxy.errors and all(not machine.errors for machine in machines)
+        print("PASS SOCKS5 remote target IP, two-machine transfer, denial, and unavailable proxy without direct fallback")
+    finally:
+        for bridge in bridges:
+            bridge.close()
+        proxy.close()
         for machine in machines:
             machine.close()
 

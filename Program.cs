@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using UvncFtpBridge.Cli;
 using UvncFtpBridge.Ftp;
+using UvncFtpBridge.Rfb;
 
 namespace UvncFtpBridge;
 
@@ -64,7 +65,8 @@ static class Program
 
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            var server = new FtpServer(bindAddress, ftpPort, vncPort, target);
+            var proxy = Socks5Proxy.FromEnvironment();
+            var server = new FtpServer(bindAddress, ftpPort, vncPort, target, proxy);
             server.Start();
             // 給 WinSCP 子程序的唯一 stdout 訊息；記錄統一走 stderr。
             if (readyStdout)
@@ -121,7 +123,77 @@ static class Program
         Check(Client.RemoteSession.ParseHost("10.0.0.5:5901", 5900) == ("10.0.0.5", 5901), "解析 IP:埠");
         Check(Client.RemoteSession.ParseHost("10.0.0.5", 5900) == ("10.0.0.5", 5900), "解析 IP（預設埠）");
 
+        // SOCKS5：用本機假代理檢查交握位元組
+        Check(Socks5Proxy.Parse("127.0.0.1:1081") == new Socks5Proxy("127.0.0.1", 1081), "SOCKS5 解析 127.0.0.1:1081");
+        Check(Throws<ArgumentException>(() => Socks5Proxy.Parse("127.0.0.1")), "SOCKS5 沒給埠要報錯");
+        byte[] ipv4Request = [5, 1, 0, 1, 10, 1, 2, 3, 0x17, 0x0C];
+        Check(Socks5Exchange("10.1.2.3", 5900, ipv4Request, [5, 0, 0, 3, 4, (byte)'j', (byte)'u', (byte)'m', (byte)'p', 0, 0], out string data) == null && data == "RFB",
+            "SOCKS5 CONNECT IPv4，讀完網域格式的綁定位址後接著是目標資料");
+        byte[] domainRequest = [5, 1, 0, 3, 3, (byte)'v', (byte)'n', (byte)'c', 0x17, 0x0C];
+        Check(Socks5Exchange("vnc", 5900, domainRequest, [5, 0, 0, 1, 0, 0, 0, 0, 0, 0], out data) == null && data == "RFB",
+            "SOCKS5 CONNECT 網域名稱交給代理解析");
+        string? refused = Socks5Exchange("10.1.2.3", 5900, ipv4Request, [5, 5, 0, 1, 0, 0, 0, 0, 0, 0], out _);
+        Check(refused?.Contains("回應碼 5") == true, "SOCKS5 代理拒絕時回報回應碼");
+        string? noProxy = Socks5ConnectError(new Socks5Proxy("127.0.0.1", UnusedPort()));
+        Check(noProxy?.StartsWith("連不上 SOCKS5 代理") == true, "SOCKS5 代理沒開時報錯");
+
         Console.WriteLine(fail == 0 ? "\n全部通過。" : $"\n有 {fail} 項失敗。");
         return fail == 0 ? 0 : 1;
+    }
+
+    static bool Throws<T>(Action act) where T : Exception
+    {
+        try { act(); return false; }
+        catch (T) { return true; }
+    }
+
+    static int UnusedPort()
+    {
+        var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        int port = ((IPEndPoint)l.LocalEndpoint).Port;
+        l.Stop();
+        return port;
+    }
+
+    static string? Socks5ConnectError(Socks5Proxy proxy)
+    {
+        using var tcp = new System.Net.Sockets.TcpClient();
+        try { proxy.Connect(tcp, "10.1.2.3", 5900, 3000); return null; }
+        catch (VncException ex) { return ex.Message; }
+    }
+
+    /// <summary>假 SOCKS5 代理：檢查客戶端送來的 CONNECT 請求，回 reply，成功時再送 "RFB" 當作目標資料。</summary>
+    static string? Socks5Exchange(string host, int port, byte[] expectedRequest, byte[] reply, out string data)
+    {
+        data = "";
+        var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        bool requestOk = false;
+        var server = Task.Run(() =>
+        {
+            using var peer = listener.AcceptTcpClient();
+            var s = peer.GetStream();
+            byte[] greeting = new byte[3];
+            s.ReadExactly(greeting);
+            s.Write(new byte[] { 5, 0 });
+            byte[] request = new byte[expectedRequest.Length];
+            s.ReadExactly(request);
+            requestOk = greeting.AsSpan().SequenceEqual(new byte[] { 5, 1, 0 }) && request.AsSpan().SequenceEqual(expectedRequest);
+            s.Write(reply);
+            if (reply[1] == 0) s.Write("RFB"u8);
+        });
+        try
+        {
+            using var tcp = new System.Net.Sockets.TcpClient();
+            try { new Socks5Proxy("127.0.0.1", ((IPEndPoint)listener.LocalEndpoint).Port).Connect(tcp, host, port, 3000); }
+            catch (VncException ex) { return ex.Message; }
+            byte[] buf = new byte[3];
+            tcp.GetStream().ReadExactly(buf);
+            data = Encoding.ASCII.GetString(buf);
+            server.Wait(3000);
+            return requestOk ? null : "請求位元組不符";
+        }
+        finally { listener.Stop(); }
     }
 }

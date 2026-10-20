@@ -8,11 +8,15 @@ import socket
 import subprocess
 import tempfile
 
-from integration import Machine, ROOT
+from integration import Machine, ROOT, SocksProxy
 
 
-def launch(package, script, env):
-    result = subprocess.run([str(package / "UvncFtpBridge.exe"), "winscp", "--script", str(script)],
+def launch(package, script, env, file_tunnel=False):
+    command = [str(package / "UvncFtpBridge.exe"), "winscp"]
+    if file_tunnel:
+        command.append("--file-tunnel")
+    command += ["--script", str(script)]
+    result = subprocess.run(command,
                             capture_output=True, env=env, timeout=60)
     if result.returncode:
         password = env.get("UVNC_PASSWORD", "")
@@ -73,6 +77,65 @@ def run(args):
             assert not machine.errors, machine.errors
             print("PASS portable launcher: INI proxy defaults, Unicode/space paths, saved sites across launches, bridge shutdown")
         finally:
+            machine.close()
+
+        machine = Machine("portable-socks")
+        proxy = SocksProxy({("203.0.113.11", machine.port): machine.port})
+        try:
+            assert (package / "Start-WinSCP-FileTunnel.vbs").exists()
+            assert (package / "Start-WinSCP-FileTunnel.cmd").exists()
+            assert (package / "Start-FileTunnel-Remote.cmd").exists()
+            assert (package / "Start-FileTunnel-Remote.ps1").exists()
+            assert (package / "ft.exe").exists()
+            env = os.environ.copy()
+            env["UVNC_PASSWORD"] = "testpass"
+            env["UVNC_SOCKS5_PROXY"] = f"127.0.0.1:{proxy.port}"
+            script.write_text("\n".join([
+                "option batch abort", "option confirm off",
+                f'open ftp://ultravnc@203.0.113.11:{machine.port}/ -password="%UVNC_PASSWORD%"',
+                "ls /", f'get -transfer=binary /C:/hello.txt "{download}"', "exit",
+            ]), encoding="utf-8-sig")
+            launch(package, script, env)
+            assert download.read_bytes() == machine.files["C:\\hello.txt"]
+            assert ("203.0.113.11", machine.port) in proxy.requests
+            assert not proxy.errors and not machine.errors
+            print("PASS portable WinSCP uses real machine IP through SOCKS5")
+        finally:
+            proxy.close()
+            machine.close()
+
+        machine = Machine("portable-file-tunnel")
+        shared = pathlib.Path(tempfile.gettempdir()) / "UvncFtpBridge" / "FileTunnel"
+        shared.mkdir(parents=True, exist_ok=True)
+        marker = shared / "active.marker"
+        assert not marker.exists(), "another local File-Tunnel session is active"
+        remote = subprocess.Popen([
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            str(package / "Start-FileTunnel-Remote.ps1"), str(shared),
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        try:
+            import time
+            time.sleep(1)
+            assert remote.poll() is None, "remote launcher should wait for the local tunnel"
+            marker.write_text("test", encoding="ascii")
+            time.sleep(1)
+            script.write_text("\n".join([
+                "option batch abort", "option confirm off",
+                f'open ftp://ultravnc@127.0.0.1:{machine.port}/ -password="%UVNC_PASSWORD%"',
+                "ls /", f'get -transfer=binary /C:/hello.txt "{download}"', "exit",
+            ]), encoding="utf-8-sig")
+            env = os.environ.copy()
+            env["UVNC_PASSWORD"] = "testpass"
+            launch(package, script, env, file_tunnel=True)
+            assert download.read_bytes() == machine.files["C:\\hello.txt"]
+            check_listener_closed(1081)
+            assert remote.wait(timeout=10) == 0
+            assert not machine.errors, machine.errors
+            print("PASS portable File-Tunnel SOCKS5 to UltraVNC, remote shutdown and TEMP cleanup")
+        finally:
+            if remote.poll() is None:
+                remote.terminate()
+                remote.wait(timeout=5)
             machine.close()
 
         if args.live_host:

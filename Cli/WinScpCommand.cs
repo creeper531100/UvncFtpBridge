@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using UvncFtpBridge.Ftp;
+using UvncFtpBridge.Rfb;
 
 namespace UvncFtpBridge.Cli;
 
@@ -17,8 +18,14 @@ public static class WinScpCommand
         try
         {
             string? script = null;
-            if (args.Length == 2 && args[0] == "--script") script = Path.GetFullPath(args[1]);
-            else if (args.Length != 0) throw new ArgumentException("用法：UvncFtpBridge winscp [--script 檔案]");
+            bool fileTunnel = false;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--file-tunnel" && !fileTunnel) fileTunnel = true;
+                else if (args[i] == "--script" && script == null && i + 1 < args.Length)
+                    script = Path.GetFullPath(args[++i]);
+                else throw new ArgumentException("用法：UvncFtpBridge winscp [--file-tunnel] [--script 檔案]");
+            }
             if (!File.Exists(executable)) throw new FileNotFoundException("找不到可攜版 WinSCP：" + executable);
             if (!File.Exists(iniPath)) throw new FileNotFoundException("找不到可攜版預設設定：" + iniPath);
             if (script != null && !File.Exists(script)) throw new FileNotFoundException("找不到指令稿：" + script);
@@ -35,7 +42,9 @@ public static class WinScpCommand
                 Directory.CreateDirectory(Path.Combine(baseDir, "Logs"));
                 Log.FilePath = Path.Combine(baseDir, "Logs", "launcher.log");
                 using var stop = new CancellationTokenSource();
-                var server = new FtpServer(IPAddress.Loopback, 0, 5900);
+                using var tunnel = fileTunnel ? FileTunnelSession.Start(baseDir) : null;
+                var proxy = fileTunnel ? new Socks5Proxy("127.0.0.1", FileTunnelSession.SocksPort) : Socks5Proxy.FromEnvironment();
+                var server = new FtpServer(IPAddress.Loopback, 0, 5900, proxy: proxy);
                 server.Start();
                 Task serve = Task.Run(() => server.Run(stop.Token));
                 try
