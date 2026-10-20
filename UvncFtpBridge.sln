@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37516.0 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UvncFtpBridge", "UvncFtpBridge.csproj", "{CF159E65-A9B1-AB8B-B55B-67CED019597D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CF159E65-A9B1-AB8B-B55B-67CED019597D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CF159E65-A9B1-AB8B-B55B-67CED019597D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CF159E65-A9B1-AB8B-B55B-67CED019597D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CF159E65-A9B1-AB8B-B55B-67CED019597D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {0B4DE6C5-1A83-4062-8C95-CD78F76E88BF}
+	EndGlobalSection
+EndGlobal

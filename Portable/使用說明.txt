@@ -1,0 +1,23 @@
+UltraVNC 檔案傳輸 — WinSCP 可攜套件
+
+1. 先把整個 ZIP 解壓縮到可寫入的資料夾。
+2. 雙擊 Start-WinSCP.vbs，會自動開啟 WinSCP 與背景 CLI 橋接。
+3. 在「新增站台」填真實機台 IP、VNC 埠（預設 5900）及 VNC 密碼。
+4. FTP、不加密、使用者名稱 ultravnc、代理設定都已預設好，不用手動調整。
+5. 可以儲存多個機台站台。設定保存在 WinSCP\WinSCP.ini。
+6. 關閉這份 WinSCP 後，這次啟動的 CLI 橋接會一起結束。
+
+若電腦禁止執行 VBS，改雙擊 Start-WinSCP.cmd；功能相同，會多顯示命令列視窗。
+請從上述啟動檔開啟，讓 CLI 同時啟動；不要直接開 WinSCP 子資料夾的 EXE。
+啟動失敗時可查看 Logs\launcher.log，或用 CMD 啟動檔查看錯誤。
+
+機台需開啟 UltraVNC File Transfer，並使用完整權限的 VNC 密碼。
+套件不預存任何機台 IP 或密碼，協定名稱顯示為原版 WinSCP 的 FTP。
+
+CLI 直接使用：
+  UvncFtpBridge.exe --help
+  UvncFtpBridge.exe ls 機台IP --json
+  UvncFtpBridge.exe get 機台IP C:\MES\log.txt
+
+WinSCP 為官方未修改的可攜版；授權文件在 WinSCP\license.txt。
+官方網站：https://winscp.net/

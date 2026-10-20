@@ -1,0 +1,11 @@
+WinSCP 6.7 Portable (official, unmodified binaries)
+Publisher: Martin Prikryl
+Website: https://winscp.net/
+License: WinSCP\license.txt
+Portable download: https://winscp.net/download/WinSCP-6.7-Portable.zip/download
+Official corresponding source: https://winscp.net/download/WinSCP-6.7-Source.zip/download
+Traditional Chinese translation: https://winscp.net/translations/dll/6.7/ch.zip
+Portable ZIP SHA-256: fef88545873aca4b353ac322b1e2702f2feadf30758b713f5fc7e2bed60f7662
+
+The separately bundled UvncFtpBridge CLI translates FTP requests to UltraVNC file transfers.
+The WinSCP executables have not been modified or rebuilt.
