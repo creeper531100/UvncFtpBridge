@@ -16,6 +16,17 @@ try {
         $profiles = "\\tsclient\$drive\Users"
     }
 
+    $extraOptions = @()
+    $optionsFile = Join-Path $PSScriptRoot 'ft-options.txt'
+    if (Test-Path -LiteralPath $optionsFile) {
+        foreach ($line in [IO.File]::ReadAllLines($optionsFile)) {
+            $line = $line.Trim()
+            if ($line.Length -eq 0 -or $line.StartsWith('#')) { continue }
+            $extraOptions += $line -split '\s+'
+        }
+    }
+    if ($extraOptions.Count -gt 0) { Write-Host ('Extra ft.exe options (ft-options.txt): ' + ($extraOptions -join ' ')) }
+
     Write-Host 'Waiting for the local WinSCP File-Tunnel launcher. Close this window or press Ctrl+C to stop.'
     # Each pass serves one local launcher session; when it ends, go back to waiting for the next one.
     while ($true) {
@@ -48,7 +59,8 @@ try {
         Write-Host ''
         Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Connected to local tunnel: $shared"
         Write-Host 'Keep this window open while using WinSCP.'
-        $process = Start-Process -FilePath $ft -ArgumentList @('--read', ('"' + (Join-Path $shared 'to-remote.dat') + '"'), '--write', ('"' + (Join-Path $shared 'to-local.dat') + '"')) -NoNewWindow -PassThru
+        $ftArgs = @('--read', ('"' + (Join-Path $shared 'to-remote.dat') + '"'), '--write', ('"' + (Join-Path $shared 'to-local.dat') + '"')) + $extraOptions
+        $process = Start-Process -FilePath $ft -ArgumentList $ftArgs -NoNewWindow -PassThru
         $null = $process.Handle # keep the handle so ExitCode is available after ft.exe exits
         try {
             while (-not $process.HasExited) {

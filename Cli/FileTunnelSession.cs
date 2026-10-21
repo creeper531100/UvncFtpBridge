@@ -39,6 +39,7 @@ internal sealed class FileTunnelSession : IDisposable
         start.ArgumentList.Add(Path.Combine(shared, "to-remote.dat"));
         start.ArgumentList.Add("--read");
         start.ArgumentList.Add(Path.Combine(shared, "to-local.dat"));
+        foreach (string option in ExtraOptions(baseDir)) start.ArgumentList.Add(option);
         var process = new Process { StartInfo = start };
         process.OutputDataReceived += (_, e) => { if (e.Data != null) Log.Info("File-Tunnel: " + e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data != null) Log.Warn("File-Tunnel: " + e.Data); };
@@ -75,6 +76,20 @@ internal sealed class FileTunnelSession : IDisposable
             process.Dispose();
             Cleanup(shared);
         }
+    }
+
+    /// <summary>Read optional ft.exe arguments from ft-options.txt beside the executable.</summary>
+    internal static IReadOnlyList<string> ExtraOptions(string baseDir)
+    {
+        string path = Path.Combine(baseDir, "ft-options.txt");
+        if (!File.Exists(path)) return [];
+        var options = File.ReadAllLines(path)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .SelectMany(line => line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .ToList();
+        if (options.Count > 0) Log.Info("ft.exe 額外參數（ft-options.txt）：" + string.Join(' ', options));
+        return options;
     }
 
     static void Cleanup(string shared)

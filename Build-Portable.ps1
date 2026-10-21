@@ -46,7 +46,7 @@ $cliFiles = @(if ($FrameworkDependent) {
 })
 foreach ($cliFile in $cliFiles) { Copy-Item -LiteralPath $cliFile.FullName -Destination $packagePath }
 Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\WinSCP.ini') -Destination $clientPath
-foreach ($item in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','Start-FileTunnel-Remote.ps1','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
+foreach ($item in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','Start-FileTunnel-Remote.ps1','ft-options.txt','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath
 }
 if ($FrameworkDependent) {
@@ -64,6 +64,7 @@ $files = @(
     (Join-Path $packagePath 'Start-WinSCP-FileTunnel.cmd'),
     (Join-Path $packagePath 'Start-FileTunnel-Remote.cmd'),
     (Join-Path $packagePath 'Start-FileTunnel-Remote.ps1'),
+    (Join-Path $packagePath 'ft-options.txt'),
     (Join-Path $packagePath '使用說明.txt'),
     (Join-Path $packagePath 'ThirdParty.txt'),
     (Join-Path $packagePath 'File-Tunnel-LICENSE.md'),

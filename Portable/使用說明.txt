@@ -21,6 +21,9 @@ UltraVNC 檔案傳輸 — WinSCP 可攜套件
 此入口只將 VNC 連線經 SOCKS5／共用檔案傳送；WinSCP 與橋接程式之間的 FTP 仍在本機。代理或跳板不可用時會報錯，不會自動改成直連。
 啟動失敗時可查看 Logs\launcher.log，或用 CMD 啟動檔查看錯誤。
 
+速度調整：本機與跳板可各自在 ft.exe 旁放 ft-options.txt。每行可寫一個或多個 ft.exe 參數，# 開頭的行會略過。套件內附註解範本；改完後重開對應的啟動檔。下載速度主要受跳板端設定影響，上傳主要受本機設定影響。
+WinSCP 傳檔會自動要求 zlib 壓縮，CSV、log 這類文字檔傳得比較快。
+
 機台需開啟 UltraVNC File Transfer，並使用完整權限的 VNC 密碼。
 套件不預存任何機台 IP 或密碼，協定名稱顯示為原版 WinSCP 的 FTP。
 
