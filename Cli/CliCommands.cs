@@ -6,7 +6,7 @@ using UvncFtpBridge.Rfb;
 namespace UvncFtpBridge.Cli;
 
 /// <summary>
-/// 命令列模式。輸出規則（方便 SSH / AI 使用）：
+/// 命令列模式。輸出規則（方便腳本 / AI 使用）：
 ///   成功結果 → stdout；進度與錯誤 → stderr；結束碼 0=成功、1=失敗、2=用法錯誤。
 /// </summary>
 public static class CliCommands
@@ -407,13 +407,15 @@ public static class CliCommands
           從 \\tsclient\C 找本機啟動檔的共用資料夾，用旁邊的 ft.exe 接上；本機重開時自動重接。
           本機系統磁碟不是 C 時給磁碟代號，例如 --remote D。
 
-        【VNC 遠端 PowerShell】（只有 VNC 埠的機台，跑指令、抓 log；不需要 ssh）
-          UvncFtpBridge --ssh [root@]<機台> -p <VNC密碼> [--admin] [--type] [--timeout 秒] [指令...]
-            例: UvncFtpBridge --ssh 192.168.1.45 -p 密碼                 互動提示字元
-                UvncFtpBridge --ssh 192.168.1.45 -p 密碼 "Get-Content C:\MES\log.txt -Tail 50"
-                UvncFtpBridge --ssh root@192.168.1.45 -p 密碼            系統管理員（機台跳 UAC，按「是」之前會一直等）
+        【VNC 遠端 PowerShell】（只有 VNC 埠的機台，跑指令、抓 log）
+          UvncFtpBridge --rc [root@]<機台> -p <VNC密碼> [--admin] [--type] [--timeout 秒] [指令...]
+            例: UvncFtpBridge --rc 192.168.1.45 -p 密碼                 互動提示字元
+                UvncFtpBridge --rc 192.168.1.45 -p 密碼 "Get-Content C:\MES\log.txt -Tail 50"
+                UvncFtpBridge --rc root@192.168.1.45 -p 密碼            系統管理員（機台跳 UAC，按「是」之前會一直等）
           互動模式就是一般命令列：← → 游標、Home/End、插入／刪除、↑ ↓ 與 F7 歷史、中文輸入都照常；
-          Ctrl+C 中止正在跑的指令（例如 ping -t），exit 離開、cls 清畫面。--shell 是同一個指令的別名。
+          Ctrl+C 中止正在跑的指令（例如 ping -t），exit 離開、cls 清畫面。
+          貼上多行腳本（例如 AI 給的打包 log 指令）會整段一起執行，不會被拆成一行一行；
+          跨行語法（foreach {}、here-string 等）會顯示 >> 續行，輸入空行送出。也可用 --script 檔.ps1 送整個檔。
           原理：機台上開一個常駐的 PowerShell 工作視窗（一般與系統管理員各一個），之後每條指令都在同一個視窗、
           同一份權限與工作目錄執行；指令與輸出都經檔案傳輸走 TEMP。第一條指令會冷啟動那個視窗（Win+R），
           之後都不用再動鍵盤。可走 UVNC_SOCKS5_PROXY 代理。機台須未鎖屏、有互動桌面，冷啟動才有效；剪貼簿被停用時加 --type。

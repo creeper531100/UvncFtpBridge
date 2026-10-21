@@ -381,7 +381,7 @@ public sealed class RfbConnection : IDisposable
         catch { }
     }
 
-    // ---------------- 送鍵盤／剪貼簿（用來在遠端模擬打字，給 VNC-SSH 用） ----------------
+    // ---------------- 送鍵盤／剪貼簿（用來在遠端模擬打字，給 VNC-RC 用） ----------------
 
     const byte MsgKeyEvent = 4, MsgClientCutText = 6;
 

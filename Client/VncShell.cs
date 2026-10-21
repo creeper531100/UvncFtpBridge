@@ -7,7 +7,7 @@ namespace UvncFtpBridge.Client;
 public sealed record ShellOptions
 {
     /// <summary>機台上放 driver、指令佇列與輸出的資料夾。</summary>
-    public string TempDir { get; init; } = @"C:\Windows\Temp\uvncssh";
+    public string TempDir { get; init; } = @"C:\Windows\Temp\uvncrc";
     /// <summary>冷啟動 driver 時強制逐字打字（剪貼簿同步被停用時用），否則以剪貼簿貼上為主。</summary>
     public bool ForceTyping { get; init; }
     /// <summary>跑完不刪暫存輸出檔（除錯用）。</summary>
@@ -23,7 +23,7 @@ public sealed record ShellOptions
 public sealed record ShellResult(int ExitCode, string Output, bool TimedOut, string? Cwd = null, bool Canceled = false);
 
 /// <summary>
-/// VNC-SSH 的核心引擎（常駐 driver 模型）。
+/// VNC-RC 的核心引擎（常駐 driver 模型）。
 ///
 /// 冷啟動：用 Win+R 在機台開一個常駐的 PowerShell driver 迴圈，它輪詢 TEMP 裡的指令佇列。
 /// 之後每條指令只是上傳一個指令檔＋觸發檔，driver 在「同一個 session」（同一份變數、工作目錄與權限）
@@ -39,7 +39,7 @@ public static class VncShell
     const int ColdStartGraceMs = 3000; // 觸發檔沒被接手多久就判定沒有 driver、自動冷啟動
     const int AbortGraceMs = 5000;     // 送出中止旗標後，等 driver 把指令砍掉並收尾的上限
 
-    /// <param name="admin">用系統管理員 driver 執行（ssh 用 root@ 登入）。</param>
+    /// <param name="admin">用系統管理員 driver 執行（root@機台 或 --admin）。</param>
     /// <param name="status">等待中要告訴使用者的訊息（例如請去按 UAC）。</param>
     /// <param name="onOutput">邊跑邊把輸出（已長出來的完整行）串流回去；給了就不在結果裡重複塞 Output。</param>
     /// <param name="ct">取消（Ctrl+C）：會送中止旗標讓機台把正在跑的指令砍掉，再把本機這邊的等待收掉。</param>
@@ -161,7 +161,7 @@ public static class VncShell
             // 系統管理員 driver 寫的檔案預設只有 Administrators 能讀，非提升權限的 winvnc 抓不回來；
             // 對這個資料夾補上「同一個使用者」可繼承的修改權限
             "try { icacls $dir /grant ('*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value + ':(OI)(CI)M') | Out-Null } catch { }\r\n" +
-            "$host.UI.RawUI.WindowTitle = \"UvncFtpBridge VNC-SSH ($Mode)\"\r\n" +
+            "$host.UI.RawUI.WindowTitle = \"UvncFtpBridge VNC-RC ($Mode)\"\r\n" +
             "$enc = New-Object System.Text.UTF8Encoding($false)\r\n" +   // 不帶 BOM，閘道一段一段接起來才乾淨
             "$inst = \"$dir\\instance_$Mode.txt\"\r\n" +
             "$tok = [guid]::NewGuid().ToString('N')\r\n" +

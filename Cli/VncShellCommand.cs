@@ -5,30 +5,31 @@ using UvncFtpBridge.Rfb;
 namespace UvncFtpBridge.Cli;
 
 /// <summary>
-/// 只有 VNC 埠的機台上跑 PowerShell 指令：UvncFtpBridge --ssh [root@]&lt;機台&gt; -p 密碼 [指令...]
-/// 不經過 ssh，直接在本程序裡把指令交給 <see cref="VncShell"/>（機台常駐 driver），輸出邊跑邊印。
+/// 只有 VNC 埠的機台上跑 PowerShell 指令：UvncFtpBridge --rc [root@]&lt;機台&gt; -p 密碼 [指令...]
+/// 直接在本程序裡把指令交給 <see cref="VncShell"/>（機台常駐 driver），輸出邊跑邊印。
 /// 互動模式用本機主控台的 Console.ReadLine 讀指令，所以 ← → 游標、插入／刪除、↑ ↓ 與 F7 歷史、
 /// 中文輸入法、折行都由 Windows 主控台自己處理，不用自己寫行編輯器。Ctrl+C 中止機台上正在跑的指令。
 /// </summary>
 public static class VncShellCommand
 {
     const string Usage =
-        "用法: UvncFtpBridge --ssh [root@]<機台ip[:vncport]> -p <VNC密碼> [選項] [指令...]\n" +
+        "用法: UvncFtpBridge --rc [root@]<機台ip[:vncport]> -p <VNC密碼> [選項] [指令...]\n" +
         "  沒給指令就進互動提示字元；給了就跑一次、印出輸出，以指令的 exit code 結束。\n" +
         "  --admin               系統管理員（同 root@機台；機台跳 UAC，按「是」之前會一直等）\n" +
         "  --vnc-port <n>        VNC 埠（預設 5900，也可寫在 ip:port）\n" +
-        "  --temp <路徑>         機台暫存資料夾（預設 C:\\Windows\\Temp\\uvncssh）\n" +
+        "  --script <本機檔案>   把整個 .ps1 檔當一份腳本送出（含多行）\n" +
+        "  --temp <路徑>         機台暫存資料夾（預設 C:\\Windows\\Temp\\uvncrc）\n" +
         "  --type                冷啟動改用逐字打字（剪貼簿同步被停用時用）\n" +
         "  --timeout <秒>        單條指令的上限（給指令時預設 120；互動模式預設不限，用 Ctrl+C 中止）\n" +
         "  --winr-ms <ms>        Win+R 後等待（預設 800）\n" +
         "  --keep                跑完不刪機台上的暫存檔（除錯用）\n" +
-        "  例: UvncFtpBridge --ssh 192.168.1.45 -p 密碼\n" +
-        "      UvncFtpBridge --ssh 192.168.1.45 -p 密碼 \"Get-Content C:\\MES\\log.txt -Tail 50\"\n" +
-        "      UvncFtpBridge --ssh root@192.168.1.45 -p 密碼";
+        "  例: UvncFtpBridge --rc 192.168.1.45 -p 密碼\n" +
+        "      UvncFtpBridge --rc 192.168.1.45 -p 密碼 \"Get-Content C:\\MES\\log.txt -Tail 50\"\n" +
+        "      UvncFtpBridge --rc root@192.168.1.45 -p 密碼";
 
     public static int Run(string[] args)
     {
-        string? target = null, password = null, tempDir = null;
+        string? target = null, password = null, tempDir = null, scriptFile = null;
         int vncPort = 5900, winrMs = 800;
         int? timeoutSec = null;
         bool admin = false, forceTyping = false, keep = false;
@@ -44,6 +45,7 @@ public static class VncShellCommand
                 case "-p" or "--password" when hasValue: password = args[++i]; break;
                 case "--vnc-port" when hasValue && int.TryParse(args[i + 1], out int vp): vncPort = vp; i++; break;
                 case "--temp" when hasValue: tempDir = args[++i]; break;
+                case "--script" when hasValue: scriptFile = args[++i]; break;
                 case "--timeout" when hasValue && int.TryParse(args[i + 1], out int ts): timeoutSec = ts; i++; break;
                 case "--winr-ms" when hasValue && int.TryParse(args[i + 1], out int wr): winrMs = wr; i++; break;
                 case "--admin": admin = true; break;
@@ -70,10 +72,17 @@ public static class VncShellCommand
             target = target[(at + 1)..];
         }
 
-        bool interactive = command.Count == 0;
+        // --script 檔案：整個檔案當成一份腳本（含多行）一次送出
+        string? scriptBody = null;
+        if (scriptFile != null)
+        {
+            try { scriptBody = File.ReadAllText(scriptFile); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("讀不到腳本檔：" + ex.Message); return 2; }
+        }
+        bool interactive = command.Count == 0 && scriptBody == null;
         var opt = new ShellOptions
         {
-            TempDir = tempDir ?? @"C:\Windows\Temp\uvncssh",
+            TempDir = tempDir ?? @"C:\Windows\Temp\uvncrc",
             ForceTyping = forceTyping,
             KeepFiles = keep,
             TimeoutMs = timeoutSec is int t ? t * 1000 : interactive ? int.MaxValue : 120_000,
@@ -118,7 +127,7 @@ public static class VncShellCommand
 
             if (!interactive)
             {
-                var r = Execute(string.Join(' ', command), stream: true);
+                var r = Execute(scriptBody ?? string.Join(' ', command), stream: true);
                 return r.Canceled ? 130 : r.TimedOut ? 124 : r.ExitCode < 0 ? 255 : r.ExitCode;
             }
             return Interactive(session, opt, admin, Execute, interrupted);
@@ -145,25 +154,30 @@ public static class VncShellCommand
         string cwd = init.Cwd ?? "";
         try { Console.Title = $"VNC Shell - {host}{(admin ? " (管理員)" : "")}"; } catch (IOException) { }
         Status("已連上 " + host + "。exit 離開、cls 清畫面、Ctrl+C 中止正在跑的指令；← → ↑ ↓ F7 照一般命令列使用。\n");
+        Status("貼上多行腳本會整段一起執行；跨行語法（foreach {}、here-string 等）會顯示 >> 續行，空行送出。\n");
+
+        bool MorePasted() { try { return Console.KeyAvailable; } catch (Exception) { return false; } }
 
         while (true)
         {
             WritePrompt(host, cwd, admin);
             interrupted.Reset();
-            string? line = Console.ReadLine();
-            if (line == null)
+            string? script = InputCollector.ReadScript(Console.ReadLine, MorePasted, () => Console.Write(">> "));
+            if (script == null)
             {
                 // Ctrl+C 會讓 ReadLine 回 null；處理常式在另一條執行緒，稍等一下再判斷是不是真的 EOF（Ctrl+Z）
                 if (interrupted.Wait(200)) { Console.WriteLine(); continue; }
                 Console.WriteLine();
                 return 0;
             }
-            string cmd = line.Trim();
+            string cmd = script.Trim();
             if (cmd.Length == 0) continue;
             if (cmd is "exit" or "logout" or "quit") return 0;
             if (cmd is "cls" or "clear") { try { Console.Clear(); } catch (IOException) { } continue; }
 
-            var r = execute(cmd, true);
+            int lineCount = script.Split('\n').Length;
+            if (lineCount > 1) Status($"（送出 {lineCount} 行腳本）\n");
+            var r = execute(script, true);   // 整段腳本作為單一指令送出，機台端以一份 .ps1 執行
             if (r.Cwd != null) cwd = r.Cwd;
             if (r.Canceled) Status("^C 已中止\n");
         }
