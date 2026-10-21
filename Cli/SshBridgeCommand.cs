@@ -174,10 +174,17 @@ public static class SshBridgeCommand
                 }
                 if (string.IsNullOrWhiteSpace(command)) { channel.SendClose(0); return; }
 
+                // ssh client 被 Ctrl+C 中斷（連線斷掉）時，順手把機台上正在跑的指令也中止。
+                // 注意：exec 的 stdin 很快就 EOF，不能拿 EOF 當取消，只認 channel 真的關閉。
+                using var cts = new CancellationTokenSource();
+                channel.CloseReceived += (_, _) => { try { cts.Cancel(); } catch { } };
+
                 var r = VncShell.RunCommand(session, command, opt, admin,
-                    msg => { try { channel.SendData(Encoding.UTF8.GetBytes(msg.Replace("\n", "\r\n"))); } catch { } });
-                if (r.Output.Length > 0) channel.SendData(Encoding.UTF8.GetBytes(r.Output));
-                uint code = r.TimedOut ? 124u : r.ExitCode < 0 ? 255u : (uint)r.ExitCode;
+                    status: msg => { try { channel.SendData(Encoding.UTF8.GetBytes(msg.Replace("\n", "\r\n"))); } catch { } },
+                    onOutput: chunk => { try { channel.SendData(Encoding.UTF8.GetBytes(chunk)); } catch { } },  // 原樣送（Out-String 已含換行）
+                    ct: cts.Token);
+                if (r.Output.Length > 0) channel.SendData(Encoding.UTF8.GetBytes(r.Output));  // 有串流時 Output 為空，不會重複
+                uint code = r.Canceled ? 130u : r.TimedOut ? 124u : r.ExitCode < 0 ? 255u : (uint)r.ExitCode;
                 channel.SendClose(code);
             }
             catch (Exception ex)

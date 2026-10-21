@@ -144,13 +144,19 @@ static class Program
             "driver 腳本有 Mode 參數與 TEMP 路徑");
         Check(drv.Contains("instance_$Mode.txt") && drv.Contains("if ($cur -ne $tok) { break }"),
             "driver 每個模式各自的 instance token，同模式新 driver 接手時舊的退出");
-        Check(drv.Contains("-Filter \"go_$($Mode)_*.flag\"") && drv.Contains(". $cmd *>&1 | Out-String") && drv.Contains("$LASTEXITCODE"),
+        Check(drv.Contains("-Filter \"go_$($Mode)_*.flag\"") && drv.Contains(". $cmd *>&1 | Out-String -Stream") && drv.Contains("$LASTEXITCODE"),
             "driver 只輪詢自己模式的觸發檔、dot-source 執行並寫 exit code");
         Check(drv.Contains("icacls $dir /grant"), "driver 補資料夾權限，管理員寫的輸出 winvnc 也讀得到");
-        Check(drv.Contains("Write-Host ('PS '") && drv.Contains("Write-Host $__uvncOut"),
-            "driver 在機台視窗印出指令與輸出");
+        Check(drv.Contains("Write-Host ('PS '") && drv.Contains("[System.IO.File]::AppendAllText($out"),
+            "driver 在機台視窗印出指令，並逐行串流輸出到 out 檔");
         Check(Client.VncShell.BuildDriverScript("C:\\it's").Contains("$dir = 'C:\\it''s'"),
             "driver 腳本 TEMP 路徑的單引號有跳脫");
+        // Ctrl+C 中止：driver 起 killer 看門狗，killer 看到 abort 旗標就砍掉底下正在跑的指令
+        Check(drv.Contains("Start-Process powershell -WindowStyle Hidden") && drv.Contains("'-File',$killer,'-ppid',$PID,'-dir',$dir"),
+            "driver 冷啟動會帶起中止看門狗 killer");
+        string kil = Client.VncShell.BuildKillerScript();
+        Check(kil.Contains("'abort_*.flag'") && kil.Contains("ParentProcessId=$ppid") && kil.Contains("taskkill /PID"),
+            "killer 看到 abort 旗標就砍掉 driver 底下正在跑的指令（Ctrl+C）");
         // 冷啟動 launcher
         Check(Client.VncShell.UserLauncher("C:\\T").Contains("-File \"C:\\T\\driver.ps1\" user"),
             "非管理員 launcher 直接開 driver");

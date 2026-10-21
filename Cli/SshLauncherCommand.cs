@@ -84,8 +84,9 @@ public static class SshLauncherCommand
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("LogLevel=ERROR");
         // 不讀使用者的 ~/.ssh/config，免得那邊對同一個 IP 的設定（ProxyJump、User…）干擾
         psi.ArgumentList.Add("-F"); psi.ArgumentList.Add(OperatingSystem.IsWindows() ? "NUL" : "/dev/null");
-        // 互動模式不要 pty：回顯、退格、上下鍵歷史交給本機主控台，伺服器端一行收一行
-        if (remoteCmd.Count == 0) psi.ArgumentList.Add("-T");
+        // 互動模式要 pty（-tt 強制）：Ctrl+C 等控制字元才會原樣傳到我們這邊，才能中斷像 ping 這種會一直跑的指令。
+        // 回顯、退格、上下鍵歷史改由伺服器端（VncInteractiveShell）自己處理。
+        if (remoteCmd.Count == 0) psi.ArgumentList.Add("-tt");
         psi.ArgumentList.Add($"{user}@{host}");
         foreach (var c in remoteCmd) psi.ArgumentList.Add(c);
 

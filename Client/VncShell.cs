@@ -17,8 +17,8 @@ public sealed record ShellOptions
     public VncInput.InputTiming Timing { get; init; } = VncInput.InputTiming.Default;
 }
 
-/// <summary>一條指令的結果。<see cref="TimedOut"/> 時 <see cref="ExitCode"/> 為 -1。<see cref="Cwd"/> 是跑完後的工作目錄（互動 shell 畫提示字元用）。</summary>
-public sealed record ShellResult(int ExitCode, string Output, bool TimedOut, string? Cwd = null);
+/// <summary>一條指令的結果。<see cref="TimedOut"/> 時 <see cref="ExitCode"/> 為 -1、<see cref="Canceled"/>（Ctrl+C 中止）時為 130。<see cref="Cwd"/> 是跑完後的工作目錄（互動 shell 畫提示字元用）。</summary>
+public sealed record ShellResult(int ExitCode, string Output, bool TimedOut, string? Cwd = null, bool Canceled = false);
 
 /// <summary>
 /// VNC-SSH 的核心引擎（常駐 driver 模型）。
@@ -33,22 +33,26 @@ public sealed record ShellResult(int ExitCode, string Output, bool TimedOut, str
 public static class VncShell
 {
     const string DriverFile = "driver.ps1";
+    const string KillerFile = "killer.ps1";
     const int ColdStartGraceMs = 3000; // 觸發檔沒被接手多久就判定沒有 driver、自動冷啟動
+    const int AbortGraceMs = 5000;     // 送出中止旗標後，等 driver 把指令砍掉並收尾的上限
 
     /// <param name="admin">用系統管理員 driver 執行（ssh 用 root@ 登入）。</param>
     /// <param name="status">等待中要告訴使用者的訊息（例如請去按 UAC）。</param>
+    /// <param name="onOutput">邊跑邊把輸出（已長出來的完整行）串流回去；給了就不在結果裡重複塞 Output。</param>
+    /// <param name="ct">取消（Ctrl+C）：會送中止旗標讓機台把正在跑的指令砍掉，再把本機這邊的等待收掉。</param>
     public static ShellResult RunCommand(RemoteSession session, string command, ShellOptions opt, bool admin = false,
-        Action<string>? status = null, CancellationToken ct = default)
+        Action<string>? status = null, Action<string>? onOutput = null, CancellationToken ct = default)
     {
         var ft = session.Ft;              // 確保已連線
         var conn = session.Connection;    // 同一條連線，冷啟動時送 Win+R／剪貼簿
         string temp = RemotePath.Normalize(opt.TempDir);
         try { ft.MakeDirectory(temp); } catch (VncException) { }
-        return Submit(ft, conn, temp, command, opt, admin ? "admin" : "user", status, ct);
+        return Submit(ft, conn, temp, command, opt, admin ? "admin" : "user", status, onOutput, ct);
     }
 
     static ShellResult Submit(UvncFileTransfer ft, RfbConnection conn, string temp, string command, ShellOptions opt,
-        string mode, Action<string>? status, CancellationToken ct)
+        string mode, Action<string>? status, Action<string>? onOutput, CancellationToken ct)
     {
         string id = Guid.NewGuid().ToString("N")[..12];
         string cmdPath = RemotePath.Combine(temp, $"cmd_{id}.ps1");
@@ -56,6 +60,7 @@ public static class VncShell
         string goPath = RemotePath.Combine(temp, goName);
         string outPath = RemotePath.Combine(temp, $"out_{id}.txt");
         string donePath = RemotePath.Combine(temp, doneName);
+        string abortPath = RemotePath.Combine(temp, $"abort_{id}.flag");
         bool admin = mode == "admin";
 
         // 先上傳完整指令檔，再上傳觸發檔（driver 看到觸發檔才會去讀指令檔，避免讀到還沒傳完的內容）。
@@ -66,22 +71,62 @@ public static class VncShell
         long? deadline = null;      // driver 接手（觸發檔被拿走）後才開始算指令時限
         bool coldStarted = false;
 
-        while (!ct.IsCancellationRequested)
+        int sentChars = 0;          // 已經串流出去的字元數（只送完整的一行，避免半行／半個 UTF-8 字）
+        bool aborted = false;       // 已送出中止旗標
+        long? abortDeadline = null; // 送出中止後，等 driver 收尾的上限
+
+        // 把 out 檔新長出來的「完整行」透過 onOutput 串流出去。final 時連最後沒換行的殘段一起送。
+        void Pump(bool final)
         {
-            if (deadline is long d && Environment.TickCount64 > d) break;
-            // 一般 driver 冷啟動也只等這麼久；系統管理員要等人按 UAC，沒有上限
-            if (deadline == null && !admin && coldStarted && Environment.TickCount64 > graceDeadline + opt.TimeoutMs) break;
+            if (onOutput == null) return;
+            string cur;
+            try { cur = ReadText(ft, outPath); }
+            catch (VncException) { return; }   // out 檔還沒建立
+            int upto = cur.Length;
+            if (!final)
+            {
+                int nl = cur.LastIndexOf('\n');
+                if (nl + 1 <= sentChars) return;   // 沒有新的完整行
+                upto = nl + 1;
+            }
+            if (upto > sentChars) { onOutput(cur[sentChars..upto]); sentChars = upto; }
+        }
+
+        while (true)
+        {
+            // Ctrl+C：送一次中止旗標，機台的 killer 會把正在跑的指令（例如 ping）整棵砍掉，再給 driver 一點時間收尾。
+            if (ct.IsCancellationRequested && !aborted)
+            {
+                aborted = true;
+                try { UploadText(ft, abortPath, ""); } catch (VncException) { }
+                abortDeadline = Environment.TickCount64 + AbortGraceMs;
+            }
+            if (abortDeadline is long ad && Environment.TickCount64 > ad)
+            {
+                Pump(final: true);
+                if (!opt.KeepFiles) TryDelete(ft, goPath, cmdPath, abortPath);
+                return new ShellResult(130, onOutput == null ? ReadTextSafe(ft, outPath) : "", TimedOut: false, Cwd: null, Canceled: true);
+            }
+            if (!aborted)
+            {
+                if (deadline is long d && Environment.TickCount64 > d) break;
+                // 一般 driver 冷啟動也只等這麼久；系統管理員要等人按 UAC，沒有上限
+                if (deadline == null && !admin && coldStarted && Environment.TickCount64 > graceDeadline + opt.TimeoutMs) break;
+            }
 
             List<RemoteEntry> entries;
             try { entries = ft.ListDirectory(temp); }
-            catch (VncException) { Thread.Sleep(500); continue; }
+            catch (VncException) { Thread.Sleep(400); continue; }
+
+            Pump(final: false);   // 邊跑邊把新輸出送回去
 
             if (entries.Any(e => !e.IsDirectory && e.Name.Equals(doneName, StringComparison.OrdinalIgnoreCase)))
             {
+                Pump(final: true);
                 var (exit, cwd) = ReadDone(ft, donePath);
-                string output = ReadText(ft, outPath);
-                if (!opt.KeepFiles) TryDelete(ft, outPath, donePath);
-                return new ShellResult(exit, output, TimedOut: false, Cwd: cwd);
+                string output = onOutput == null ? ReadText(ft, outPath) : "";
+                if (!opt.KeepFiles) TryDelete(ft, outPath, donePath, abortPath);
+                return new ShellResult(exit, output, TimedOut: false, Cwd: cwd, Canceled: aborted);
             }
 
             bool goPresent = entries.Any(e => e.Name.Equals(goName, StringComparison.OrdinalIgnoreCase));
@@ -90,19 +135,20 @@ public static class VncShell
             // 觸發檔還在、沒有 driver 來接手：等過 grace 就冷啟動一個。
             if (goPresent && !coldStarted && Environment.TickCount64 > graceDeadline)
             {
+                UploadText(ft, RemotePath.Combine(temp, KillerFile), BuildKillerScript());
                 UploadText(ft, RemotePath.Combine(temp, DriverFile), BuildDriverScript(temp));
                 Inject(conn, admin ? AdminLauncher(temp) : UserLauncher(temp), opt);
                 coldStarted = true;
                 if (admin) status?.Invoke("已在機台跳出 UAC 視窗，請到機台按「是」。按好之前會一直等（Ctrl+C 取消）…\n");
             }
-            Thread.Sleep(500);
+            Thread.Sleep(400);
         }
 
         if (!opt.KeepFiles) TryDelete(ft, goPath, cmdPath);
         return new ShellResult(-1, BuildTimeoutHint(opt), TimedOut: true);
     }
 
-    /// <summary>常駐 driver 迴圈。輪詢自己模式的 go_*.flag，用「同一個 session」dot-source 執行指令檔，寫回輸出與 exit code。</summary>
+    /// <summary>常駐 driver 迴圈。輪詢自己模式的 go_*.flag，用「同一個 session」dot-source 執行指令檔，逐行串流輸出並寫回 exit code。</summary>
     internal static string BuildDriverScript(string temp)
     {
         string d = temp.Replace("'", "''");
@@ -114,9 +160,13 @@ public static class VncShell
             // 對這個資料夾補上「同一個使用者」可繼承的修改權限
             "try { icacls $dir /grant ('*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value + ':(OI)(CI)M') | Out-Null } catch { }\r\n" +
             "$host.UI.RawUI.WindowTitle = \"UvncFtpBridge VNC-SSH ($Mode)\"\r\n" +
+            "$enc = New-Object System.Text.UTF8Encoding($false)\r\n" +   // 不帶 BOM，閘道一段一段接起來才乾淨
             "$inst = \"$dir\\instance_$Mode.txt\"\r\n" +
             "$tok = [guid]::NewGuid().ToString('N')\r\n" +
             "Set-Content -LiteralPath $inst -Value $tok -Encoding ascii\r\n" +
+            // 開一個中止看門狗：看到 abort_*.flag 就把這個 driver 底下正在跑的指令砍掉（Ctrl+C 用）。視窗隱藏、跟著 driver 生死。
+            "$killer = Join-Path $dir '" + KillerFile + "'\r\n" +
+            "try { Start-Process powershell -WindowStyle Hidden -ArgumentList '-ExecutionPolicy','Bypass','-NoProfile','-File',$killer,'-ppid',$PID,'-dir',$dir | Out-Null } catch { }\r\n" +
             "while ($true) {\r\n" +
             "  try {\r\n" +
             "    $cur = Get-Content -LiteralPath $inst -ErrorAction SilentlyContinue\r\n" +
@@ -127,21 +177,44 @@ public static class VncShell
             "      $cmd = Join-Path $dir (\"cmd_\" + $id + \".ps1\")\r\n" +
             "      $out = Join-Path $dir (\"out_\" + $id + \".txt\")\r\n" +
             "      $done = Join-Path $dir (\"done_\" + $id + \".txt\")\r\n" +
+            "      $abort = Join-Path $dir (\"abort_\" + $id + \".flag\")\r\n" +
             "      Remove-Item -LiteralPath $go.FullName -ErrorAction SilentlyContinue\r\n" +   // 先拿走觸發檔，表示已接手
+            "      [System.IO.File]::WriteAllText($out, '', $enc)\r\n" +   // 先建立空的 out 檔，閘道好開始 tail
             // 視窗上也印出指令與輸出，機台現場的人看得到在做什麼
             "      Write-Host ('PS ' + (Get-Location).Path + '> ' + (Get-Content -LiteralPath $cmd -Raw).Trim()) -ForegroundColor Yellow\r\n" +
-            "      try { $__uvncOut = . $cmd *>&1 | Out-String }\r\n" +  // dot-source：變數／工作目錄持續
-            "      catch { $__uvncOut = $_ | Out-String }\r\n" +
-            "      $__uvncOut | Out-File -LiteralPath $out -Encoding utf8 -NoNewline\r\n" +
-            "      Write-Host $__uvncOut.TrimEnd()\r\n" +
+            // dot-source：變數／工作目錄持續；每出一行就追加到 out 檔，閘道邊跑邊抓（ping 這類才看得到即時輸出，也才能中斷）
+            "      try { . $cmd *>&1 | Out-String -Stream | ForEach-Object { [System.IO.File]::AppendAllText($out, ($_ + [Environment]::NewLine), $enc); Write-Host $_ } }\r\n" +
+            "      catch { $__e = ($_ | Out-String); [System.IO.File]::AppendAllText($out, $__e, $enc); Write-Host $__e }\r\n" +
             "      if ($null -ne $LASTEXITCODE) { $code = $LASTEXITCODE } else { $code = 0 }\r\n" +
             "      $loc = (Get-Location).Path\r\n" +   // 回傳工作目錄，互動 shell 畫提示字元用
             "      Set-Content -LiteralPath $done -Value (\"$code`n$loc\") -Encoding utf8\r\n" +
             "      Remove-Item -LiteralPath $cmd -ErrorAction SilentlyContinue\r\n" +
+            "      Remove-Item -LiteralPath $abort -ErrorAction SilentlyContinue\r\n" +   // 收尾清掉可能殘留的中止旗標
             "    } else { Start-Sleep -Milliseconds 200 }\r\n" +
             "  } catch { Start-Sleep -Milliseconds 200 }\r\n" +
             "}\r\n";
     }
+
+    /// <summary>
+    /// 中止看門狗：常駐在機台，看到 abort_*.flag 就把 driver（$ppid）底下正在跑的指令整棵砍掉，
+    /// 讓 dot-source 的管線收尾、driver 寫回 done。driver 一消失自己也退出。
+    /// 不砍自己（$PID）與 conhost，所以只會砍到使用者指令真正生出來的那些行程（例如 ping.exe）。
+    /// </summary>
+    internal static string BuildKillerScript() =>
+        "param([int]$ppid,[string]$dir)\r\n" +
+        "while ($true) {\r\n" +
+        "  try {\r\n" +
+        "    if (-not (Get-Process -Id $ppid -ErrorAction SilentlyContinue)) { break }\r\n" +
+        "    $f = Get-ChildItem -LiteralPath $dir -Filter 'abort_*.flag' -ErrorAction SilentlyContinue | Select-Object -First 1\r\n" +
+        "    if ($f) {\r\n" +
+        "      Get-CimInstance Win32_Process -Filter \"ParentProcessId=$ppid\" -ErrorAction SilentlyContinue | ForEach-Object {\r\n" +
+        "        if ($_.ProcessId -ne $PID -and $_.Name -notmatch 'conhost') { cmd /c \"taskkill /PID $($_.ProcessId) /T /F >nul 2>&1\" }\r\n" +
+        "      }\r\n" +
+        "      Remove-Item -LiteralPath $f.FullName -ErrorAction SilentlyContinue\r\n" +
+        "    }\r\n" +
+        "  } catch { }\r\n" +
+        "  Start-Sleep -Milliseconds 150\r\n" +
+        "}\r\n";
 
     /// <summary>非管理員冷啟動：直接開 driver 視窗。</summary>
     internal static string UserLauncher(string temp)
@@ -187,6 +260,11 @@ public static class VncShell
         using var ms = new MemoryStream();
         ft.Download(file, ms);
         return Encoding.UTF8.GetString(ms.ToArray()).TrimStart('\uFEFF');
+    }
+
+    static string ReadTextSafe(UvncFileTransfer ft, string file)
+    {
+        try { return ReadText(ft, file); } catch (VncException) { return ""; }
     }
 
     static void TryDelete(UvncFileTransfer ft, params string[] paths)
