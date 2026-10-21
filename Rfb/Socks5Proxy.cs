@@ -8,6 +8,9 @@ namespace UvncFtpBridge.Rfb;
 /// <summary>SOCKS5 代理（RFC 1928，只用免驗證 + TCP CONNECT）。目標主機名稱交給代理那端解析。</summary>
 public sealed record Socks5Proxy(string Host, int Port)
 {
+    /// <summary>連不上代理本身時，VncException 訊息的開頭（代理還沒開或沒在聽）。</summary>
+    public const string UnreachableMessage = "連不上 SOCKS5 代理";
+
     public static Socks5Proxy? FromEnvironment()
     {
         string? value = Environment.GetEnvironmentVariable("UVNC_SOCKS5_PROXY");
@@ -28,7 +31,7 @@ public sealed record Socks5Proxy(string Host, int Port)
     /// <summary>連上代理並要求它轉接到目標；成功返回後 tcp 收送的就是目標的資料。</summary>
     public void Connect(TcpClient tcp, string targetHost, int targetPort, int timeoutMs)
     {
-        RfbConnection.ConnectTcp(tcp, Host, Port, timeoutMs, $"連不上 SOCKS5 代理 {Host}:{Port}");
+        RfbConnection.ConnectTcp(tcp, Host, Port, timeoutMs, $"{UnreachableMessage} {Host}:{Port}");
 
         tcp.ReceiveTimeout = timeoutMs;
         tcp.SendTimeout = timeoutMs;

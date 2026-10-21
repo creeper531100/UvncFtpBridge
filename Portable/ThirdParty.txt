@@ -16,3 +16,12 @@ Website: https://github.com/fiddyschmitt/File-Tunnel
 License: File-Tunnel-LICENSE.md (MIT)
 Portable download: https://github.com/fiddyschmitt/File-Tunnel/releases/download/v3.5.5/ft-win-x64.exe
 SHA-256: 25a5a7a248522b2f8fd310ccd7bc627a26f363d551c66162ef47ddd7bb9588c2
+
+UltraVNC Viewer 1.4.3.6 (official, unmodified, Authenticode-signed by uvnc bvba)
+Publisher: UltraVNC team (uvnc bvba)
+Website: https://uvnc.com/
+License: UltraVNC\Licence.rtf (GNU GPL version 2)
+Download: https://uvnc.com/downloads/ultravnc/159-ultravnc-1-4-3-6.html
+Official source repository: https://github.com/ultravnc/UltraVNC
+UvncFtpBridge only starts this viewer and writes UseProxy/proxyhost/proxyport to UltraVNC\options.vnc;
+the viewer binary has not been modified or rebuilt.

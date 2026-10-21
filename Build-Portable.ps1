@@ -1,5 +1,9 @@
 ﻿[CmdletBinding()]
-param([switch]$FrameworkDependent)
+param(
+    [switch]$FrameworkDependent,
+    # The uvnc.com download sits behind a form, so bundle the signed viewer from an existing UltraVNC install.
+    [string]$VncViewerPath = (Join-Path $env:ProgramFiles 'uvnc bvba\UltraVNC\vncviewer.exe')
+)
 $ErrorActionPreference = 'Stop'
 $rootPath = $PSScriptRoot
 $cachePath = Join-Path $rootPath '.portable-cache'
@@ -38,6 +42,22 @@ if ((Get-FileHash -LiteralPath $ftCache -Algorithm SHA256).Hash -ne $ftHash) {
     throw 'File-Tunnel SHA-256 does not match the pinned release checksum.'
 }
 Copy-Item -LiteralPath $ftCache -Destination (Join-Path $packagePath 'ft.exe') -Force
+$viewerVersion = '1.4.3.6'
+if (-not (Test-Path -LiteralPath $VncViewerPath)) { throw "UltraVNC Viewer not found: $VncViewerPath (install UltraVNC $viewerVersion or pass -VncViewerPath)." }
+$viewerSignature = Get-AuthenticodeSignature -LiteralPath $VncViewerPath
+if ($viewerSignature.Status -ne 'Valid' -or $viewerSignature.SignerCertificate.Subject -notmatch '(^|, )CN=uvnc bvba(,|$)') {
+    throw 'UltraVNC Viewer signature validation failed (expected a valid signature by uvnc bvba).'
+}
+if ((Get-Item -LiteralPath $VncViewerPath).VersionInfo.FileVersion -ne $viewerVersion) {
+    throw "UltraVNC Viewer must be version $viewerVersion to match ThirdParty.txt and the tested Repeater settings."
+}
+$viewerLicense = Join-Path (Split-Path -Parent $VncViewerPath) 'Licence.rtf'
+if (-not (Test-Path -LiteralPath $viewerLicense)) { throw "UltraVNC Licence.rtf not found beside the viewer: $viewerLicense" }
+$viewerPath = Join-Path $packagePath 'UltraVNC'
+New-Item -ItemType Directory -Path $viewerPath -Force | Out-Null
+Copy-Item -LiteralPath $VncViewerPath,$viewerLicense -Destination $viewerPath -Force
+# The viewer writes its settings beside itself; ship it without a previous run's options.vnc.
+Remove-Item -LiteralPath (Join-Path $viewerPath 'options.vnc') -ErrorAction SilentlyContinue
 & (Join-Path $rootPath 'Build-CLI.ps1') -FrameworkDependent:$FrameworkDependent
 $cliFiles = @(if ($FrameworkDependent) {
     Get-ChildItem -LiteralPath (Join-Path $rootPath 'dist\FrameworkDependent') -File
@@ -46,8 +66,13 @@ $cliFiles = @(if ($FrameworkDependent) {
 })
 foreach ($cliFile in $cliFiles) { Copy-Item -LiteralPath $cliFile.FullName -Destination $packagePath }
 Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\WinSCP.ini') -Destination $clientPath
-foreach ($item in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','Start-FileTunnel-Remote.ps1','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
+foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath
+}
+# Drop entry points from earlier builds: two launchers (direct / File-Tunnel) now open WinSCP and UltraVNC together,
+# and the jump-host side runs as "UvncFtpBridge.exe --remote" instead of a PowerShell script.
+foreach ($old in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-VNC-FileTunnel.cmd','Start-FileTunnel-Remote.ps1')) {
+    Remove-Item -LiteralPath (Join-Path $packagePath $old) -ErrorAction SilentlyContinue
 }
 if ($FrameworkDependent) {
     $instructionsPath = Join-Path $packagePath '使用說明.txt'
@@ -56,19 +81,17 @@ if ($FrameworkDependent) {
     Set-Content -LiteralPath $instructionsPath -Value ($runtimeNote + $instructions) -Encoding utf8
 }
 $distributionZip = Join-Path $rootPath "dist\$packageName.zip"
-# Only ship official client files, the CLI, the clean INI template and the entry points.
+# Only ship official client files, the CLI, the clean INI template, the signed viewer and the entry points.
 $files = @(
-    (Join-Path $packagePath 'Start-WinSCP.vbs'),
-    (Join-Path $packagePath 'Start-WinSCP.cmd'),
-    (Join-Path $packagePath 'Start-WinSCP-FileTunnel.vbs'),
-    (Join-Path $packagePath 'Start-WinSCP-FileTunnel.cmd'),
+    (Join-Path $packagePath 'Start-Direct.cmd'),
+    (Join-Path $packagePath 'Start-FileTunnel.cmd'),
     (Join-Path $packagePath 'Start-FileTunnel-Remote.cmd'),
-    (Join-Path $packagePath 'Start-FileTunnel-Remote.ps1'),
     (Join-Path $packagePath '使用說明.txt'),
     (Join-Path $packagePath 'ThirdParty.txt'),
     (Join-Path $packagePath 'File-Tunnel-LICENSE.md'),
     (Join-Path $packagePath 'ft.exe'),
-    $clientPath
+    $clientPath,
+    $viewerPath
 )
 $files += @($cliFiles | ForEach-Object { Join-Path $packagePath $_.Name })
 Compress-Archive -LiteralPath $files -DestinationPath $distributionZip -Force

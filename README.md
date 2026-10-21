@@ -1,19 +1,19 @@
-# UltraVNC FTP Bridge — CLI 與 WinSCP 可攜套件
+# UltraVNC FTP Bridge — CLI 與 WinSCP ＋ UltraVNC 可攜套件
 
-這個專案只有 C# CLI，沒有自製 UI，也不包含 WinSCP 原始碼或 C++Builder 建置流程。可攜套件使用官方未修改的 WinSCP 6.7 與預設 INI。
+這個專案只有 C# CLI，沒有自製 UI，也不包含 WinSCP 原始碼或 C++Builder 建置流程。可攜套件使用官方未修改的 WinSCP 6.7、預設 INI 與官方 UltraVNC Viewer 1.4.3.6。
 
 ## 給其他事業處使用
 
-分享 `dist/UltraVNC-WinSCP-FileTunnel-Portable.zip`，對方使用 Windows x64，完整解壓縮到可寫入的資料夾後：
+分享 `dist/UltraVNC-WinSCP-FileTunnel-Portable.zip`，對方使用 Windows x64，完整解壓縮到可寫入的資料夾後，只有兩個啟動檔，都會同時開 WinSCP（傳檔）與 UltraVNC Viewer（看畫面）：
 
-1. 雙擊 **Start-WinSCP.vbs**，自動開啟 WinSCP 與隱藏的 CLI 橋接。
-2. 在新增站台填 **真實機台 IP**、**VNC 埠**（預設 5900）、**VNC 密碼**，按登入。
-3. FTP、不加密、使用者名稱 `ultravnc` 及 FTP 代理都已預設好，無需手動設定代理。可以儲存多個機台站台。
+- **Start-Direct.cmd**：直連，本機連得到機台時用。
+- **Start-FileTunnel.cmd**：經 RDP 跳板，開 File-Tunnel（`ft.exe`）。
 
-若環境禁止 VBS，雙擊 **Start-WinSCP.cmd**；功能相同，會顯示命令列視窗。請使用啟動檔，讓 CLI 橋接一起執行。
+1. 雙擊其中一個。命令視窗開著就一直可用，關閉 WinSCP 或 Viewer 不影響（可把兩者釘在工作列）；按 Q 或關閉命令視窗才結束。
+2. WinSCP 新增站台填 **真實機台 IP**、**VNC 埠**（預設 5900）、**VNC 密碼**，按登入。FTP、不加密、使用者名稱 `ultravnc` 及 FTP 代理都已預設好。
+3. UltraVNC Viewer 已預選「Repeater」，在伺服器欄填機台 IP，按 Connect。
 
-不需要安裝 WinSCP、.NET 或 C++Builder。設定保存在套件的 `WinSCP/WinSCP.ini`；套件不預存任何機台 IP 或密碼。啟動記錄在 `Logs/launcher.log`，不隨發行 ZIP 打包。
-
+不需要安裝 WinSCP、UltraVNC、.NET 或 C++Builder。設定保存在套件的 `WinSCP/WinSCP.ini` 與 `UltraVNC/options.vnc`；套件不預存任何機台 IP 或密碼。啟動記錄在 `Logs/launcher.log`，不隨發行 ZIP 打包。
 ### 精簡版（不包含 .NET 執行階段）
 
 另外提供 `dist/UltraVNC-WinSCP-FileTunnel-Portable-FrameworkDependent/` 與同名 ZIP。雙擊入口、代理設定與站台儲存方式相同，但使用電腦需先安裝 **.NET 9 Runtime x64**，不用 SDK。下載：https://dotnet.microsoft.com/en-us/download/dotnet/9.0
@@ -36,21 +36,20 @@ WinSCP 主機欄：機台真實 IP / VNC 埠
 
 完整步驟見 [File-Tunnel 部署教學](DEPLOY-FILE-TUNNEL.zh-TW.md)。File-Tunnel 使用 RDP 已提供的本機磁碟重新導向，無須註冊 mstsc 外掛；本機與跳板各執行一份官方 `ft.exe`。
 
-1. 本機雙擊 **Start-WinSCP-FileTunnel.vbs**（或 `.cmd`）。WinSCP 立即開啟，本機 SOCKS5 `127.0.0.1:1081` 等待跳板。
+1. 本機雙擊 **Start-FileTunnel.cmd**（`UvncFtpBridge.exe --open --file-tunnel`）。WinSCP 與 Viewer 立即開啟，本機 SOCKS5 `127.0.0.1:1081` 等待跳板。
 2. 自行用 mstsc 連到這次的跳板，連線設定須勾選本機 C 槽重新導向。
-3. 在跳板執行 **Start-FileTunnel-Remote.cmd**（與 `ft.exe` 放同一資料夾）。保持視窗開啟。
-4. WinSCP 站台填**目標機台的真實 IP、VNC 埠與密碼**，按登入。
+3. 在跳板執行 **Start-FileTunnel-Remote.cmd**（與 `UvncFtpBridge.exe`、`ft.exe` 放同一資料夾；它執行 `UvncFtpBridge.exe --remote`，不需 PowerShell，Windows 7 也可用）。保持視窗開啟。
+4. WinSCP 站台或 Viewer 填**目標機台的真實 IP**，連線。
 
 ```text
-WinSCP（真實機台 IP）→ 本機 FTP 橋接 → 本機 File-Tunnel SOCKS5
+WinSCP（機台 IP）→ 本機 FTP 橋接 ─┐
+Viewer（機台 IP）→ 本機 Repeater ─┴→ 本機 File-Tunnel SOCKS5
     → \\tsclient\C\... 共用檔案 → 跳板 File-Tunnel → 機台 UltraVNC Server
 ```
 
-啟動檔不指定跳板 IP，也不自動開 RDP。僅 VNC TCP 連線經 SOCKS5；WinSCP 到橋接程式的 FTP 維持在本機。代理、磁碟重新導向或跳板不可用時會報錯，**不會自動直連機台**。一般 CLI 或手動 `--ftp` 模式仍可透過 `UVNC_SOCKS5_PROXY` 指定 SOCKS5 代理。
-要走原本直連，使用 `Start-WinSCP.vbs`／`.cmd`，且不要設定該環境變數。
+啟動檔不指定跳板 IP，也不自動開 RDP。代理、磁碟重新導向或跳板不可用時會報錯，**不會自動直連機台**。`Start-Direct.cmd` 直連；若設了 `UVNC_SOCKS5_PROXY`，直連模式改經該 SOCKS5 代理，一般 CLI 或手動 `--ftp` 模式也一樣。
 
-CLI 啟動時自動更新 INI 的本機代理埠，包含原先儲存的 UltraVNC FTP 站台；主機 IP 與 VNC 密碼仍由 WinSCP 管理。各套件使用獨立可用埠，不會占用固定 2221 或與手動橋接衝突。關閉這份 WinSCP 時，CLI 橋接一起結束。同一份資料夾同時只啟動一個實例，可在 WinSCP 內開多個站台。
-
+CLI 啟動時自動更新 INI 的本機代理埠，包含原先儲存的 UltraVNC FTP 站台；主機 IP 與 VNC 密碼仍由 WinSCP 管理。橋接使用系統分配的可用埠，不會占用固定 2221 或與手動橋接衝突。同一份資料夾同時只執行一份服務；再開一次啟動檔只會再開 WinSCP 與 Viewer。
 檔案協定仍顯示原版 **FTP**。機台需啟用 UltraVNC File Transfer，並使用完整權限的 VNC 密碼。沿用現有協定限制：不支援 MS-Logon、SecureVNC 插件；機台端 VNC 傳輸未加密。
 
 ## CLI

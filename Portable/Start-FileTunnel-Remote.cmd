@@ -1,7 +1,3 @@
 @echo off
-if "%~1"=="" (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Start-FileTunnel-Remote.ps1"
-) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Start-FileTunnel-Remote.ps1" "%~1"
-)
+"%~dp0UvncFtpBridge.exe" --remote %*
 if errorlevel 1 pause

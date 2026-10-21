@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Net;
-using System.Security.Cryptography;
 using System.Text;
 using UvncFtpBridge.Ftp;
 using UvncFtpBridge.Rfb;
@@ -13,8 +12,6 @@ public static class WinScpCommand
     public static int Run(string[] args)
     {
         string baseDir = AppContext.BaseDirectory;
-        string executable = Path.Combine(baseDir, "WinSCP", "WinSCP.exe");
-        string iniPath = Path.ChangeExtension(executable, ".ini");
         try
         {
             string? script = null;
@@ -26,51 +23,45 @@ public static class WinScpCommand
                     script = Path.GetFullPath(args[++i]);
                 else throw new ArgumentException("用法：UvncFtpBridge winscp [--file-tunnel] [--script 檔案]");
             }
-            if (!File.Exists(executable)) throw new FileNotFoundException("找不到可攜版 WinSCP：" + executable);
-            if (!File.Exists(iniPath)) throw new FileNotFoundException("找不到可攜版預設設定：" + iniPath);
+            // Interactive File-Tunnel use goes through the combined WinSCP + UltraVNC launcher.
+            if (fileTunnel && script == null)
+                return TunnelHost.Run(true, new Socks5Proxy("127.0.0.1", FileTunnelSession.SocksPort), null);
+
+            EnsureInstalled(baseDir);
             if (script != null && !File.Exists(script)) throw new FileNotFoundException("找不到指令稿：" + script);
+            Directory.CreateDirectory(Path.Combine(baseDir, "Logs"));
+            Log.FilePath = Path.Combine(baseDir, "Logs", "launcher.log");
 
             // A single package owns its INI and bridge until its WinSCP process exits.
-            string packageId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(baseDir.ToUpperInvariant())));
-            using var instance = new Mutex(false, @"Local\UvncFtpBridge.Portable." + packageId);
-            bool acquired;
-            try { acquired = instance.WaitOne(0); }
-            catch (AbandonedMutexException) { acquired = true; }
-            if (!acquired) { Console.Error.WriteLine("這份可攜 WinSCP 已經開啟。"); return 0; }
+            using var instance = PackageInstance.TryAcquire(baseDir);
+            if (instance == null)
+            {
+                if (!fileTunnel || !PackageInstance.TunnelHostRunning(baseDir))
+                {
+                    Console.Error.WriteLine("這份可攜套件已經開啟（WinSCP 或通道主機）。");
+                    return 0;
+                }
+                // A script run can borrow the running tunnel host's bridge.
+                ConfigureIni(baseDir, TunnelHost.WaitForFtpPort(baseDir));
+                using var borrowed = StartWinScp(baseDir, script);
+                borrowed.WaitForExit();
+                return borrowed.ExitCode;
+            }
+            using var stop = new CancellationTokenSource();
+            using var tunnel = fileTunnel ? FileTunnelSession.Start(baseDir) : null;
+            var proxy = fileTunnel ? new Socks5Proxy("127.0.0.1", FileTunnelSession.SocksPort) : Socks5Proxy.FromEnvironment();
+            var server = new FtpServer(IPAddress.Loopback, 0, 5900, proxy: proxy);
+            server.Start();
+            Task serve = Task.Run(() => server.Run(stop.Token));
             try
             {
-                Directory.CreateDirectory(Path.Combine(baseDir, "Logs"));
-                Log.FilePath = Path.Combine(baseDir, "Logs", "launcher.log");
-                using var stop = new CancellationTokenSource();
-                using var tunnel = fileTunnel ? FileTunnelSession.Start(baseDir) : null;
-                var proxy = fileTunnel ? new Socks5Proxy("127.0.0.1", FileTunnelSession.SocksPort) : Socks5Proxy.FromEnvironment();
-                var server = new FtpServer(IPAddress.Loopback, 0, 5900, proxy: proxy);
-                server.Start();
-                Task serve = Task.Run(() => server.Run(stop.Token));
-                try
-                {
-                    ConfigureIni(iniPath, server.Port);
-                    var start = new ProcessStartInfo(executable)
-                    {
-                        WorkingDirectory = Path.GetDirectoryName(executable)!,
-                        UseShellExecute = false,
-                    };
-                    start.ArgumentList.Add("/newinstance");
-                    start.ArgumentList.Add("/ini=" + iniPath);
-                    if (script != null)
-                    {
-                        start.ArgumentList.Add("/console");
-                        start.ArgumentList.Add("/nointeractiveinput");
-                        start.ArgumentList.Add("/script=" + script);
-                    }
-                    using var client = Process.Start(start) ?? throw new IOException("無法啟動 WinSCP。");
-                    Log.Info("已啟動可攜 WinSCP；機台 IP 與 VNC 密碼請在 WinSCP 輸入。");
-                    client.WaitForExit();
-                    return client.ExitCode;
-                }
-                finally { stop.Cancel(); serve.GetAwaiter().GetResult(); }
+                ConfigureIni(baseDir, server.Port);
+                using var client = StartWinScp(baseDir, script);
+                Log.Info("已啟動可攜 WinSCP；機台 IP 與 VNC 密碼請在 WinSCP 輸入。");
+                client.WaitForExit();
+                return client.ExitCode;
             }
-            finally { instance.ReleaseMutex(); }
+            finally { stop.Cancel(); serve.GetAwaiter().GetResult(); }
         }
         catch (Exception ex)
         {
@@ -79,7 +70,37 @@ public static class WinScpCommand
         }
     }
 
-    static void ConfigureIni(string path, int port)
+    static string Executable(string baseDir) => Path.Combine(baseDir, "WinSCP", "WinSCP.exe");
+
+    static string IniPath(string baseDir) => Path.ChangeExtension(Executable(baseDir), ".ini");
+
+    internal static void EnsureInstalled(string baseDir)
+    {
+        if (!File.Exists(Executable(baseDir))) throw new FileNotFoundException("找不到可攜版 WinSCP：" + Executable(baseDir));
+        if (!File.Exists(IniPath(baseDir))) throw new FileNotFoundException("找不到可攜版預設設定：" + IniPath(baseDir));
+    }
+
+    internal static Process StartWinScp(string baseDir, string? script)
+    {
+        var start = new ProcessStartInfo(Executable(baseDir))
+        {
+            WorkingDirectory = Path.GetDirectoryName(Executable(baseDir))!,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add("/newinstance");
+        start.ArgumentList.Add("/ini=" + IniPath(baseDir));
+        if (script != null)
+        {
+            start.ArgumentList.Add("/console");
+            start.ArgumentList.Add("/nointeractiveinput");
+            start.ArgumentList.Add("/script=" + script);
+        }
+        return Process.Start(start) ?? throw new IOException("無法啟動 WinSCP。");
+    }
+
+    internal static void ConfigureIni(string baseDir, int port) => WriteIni(IniPath(baseDir), port);
+
+    static void WriteIni(string path, int port)
     {
         // Preserve saved sites and user preferences. Only the internal proxy endpoint changes.
         var sections = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
