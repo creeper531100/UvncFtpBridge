@@ -37,6 +37,19 @@ File-Tunnel 要等跳板端連上才開始接受連線（log 出現 `Started SOC
 
 本機連得到機台時，改用 `Start-Direct.cmd`：一樣開 WinSCP 與 Viewer，但不開 File-Tunnel、直接連機台。
 
+## 速度調整
+
+`ft.exe` 本身在本機磁碟上可達每秒數十 MB；經跳板時的瓶頸是 RDP 磁碟重新導向（`\\tsclient`），每次寫入共用檔都要經 RDP 來回一次。檔案傳輸會自動要求 zlib 壓縮，文字檔（CSV、log）實際傳得比較快。
+
+要調整 `ft.exe`，在 `UvncFtpBridge.exe` 旁放 `ft-options.txt`，內容會附加到 `ft.exe` 參數（空白分隔，`#` 開頭為註解）。本機與跳板各自讀自己那份：下載主要受跳板端那份影響（跳板寫 `to-local.dat`），上傳主要受本機那份影響。可以試：
+
+```text
+--read-duration 200
+--citrix
+```
+
+`--read-duration` 越大、每次寫入的資料越多、寫入次數越少，但 VNC 畫面反應會稍慢。改完重開對應的啟動檔，用 WinSCP 傳同一個大檔比較速度。
+
 ## 排查
 
 - 跳板看不到 `\\tsclient\C`：確認 mstsc 磁碟重新導向已勾選並重新連線；群組原則也可能禁止磁碟重新導向。

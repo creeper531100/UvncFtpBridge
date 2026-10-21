@@ -25,6 +25,11 @@ UltraVNC 機台工具 — WinSCP（傳檔）＋ UltraVNC Viewer（看畫面）�
 - 本機服務只聽 127.0.0.1：UltraVNC Repeater 用 5999 埠，WinSCP 橋接用系統分配的埠。
 - 套件內的 Viewer 設定存在 UltraVNC\options.vnc，每次從啟動檔開都會重新預選 Repeater。若改用電腦已安裝的 UltraVNC Viewer，請自行選「Repeater」並填 127.0.0.1:5999。
 - 啟動失敗時可查看 Logs\launcher.log。
+- 經跳板的速度主要受 RDP 磁碟重新導向限制。要調整 ft.exe，在 UvncFtpBridge.exe 旁邊放 ft-options.txt，寫入額外參數（空白分隔，# 開頭為註解），本機與跳板各放一份，例如：
+    --read-duration 200
+    --citrix
+  下載速度主要看跳板端那份，上傳主要看本機那份。改完重開對應的啟動檔即可。
+- WinSCP 傳檔會自動要求 zlib 壓縮，CSV、log 這類文字檔傳得比較快。
 - 機台需開啟 UltraVNC Server 與 File Transfer，並使用完整權限的 VNC 密碼。
 - 套件不預存任何機台 IP 或密碼。
 

@@ -66,7 +66,7 @@ $cliFiles = @(if ($FrameworkDependent) {
 })
 foreach ($cliFile in $cliFiles) { Copy-Item -LiteralPath $cliFile.FullName -Destination $packagePath }
 Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\WinSCP.ini') -Destination $clientPath
-foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
+foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','ft-options.txt','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath
 }
 # Drop entry points from earlier builds: two launchers (direct / File-Tunnel) now open WinSCP and UltraVNC together,
@@ -86,6 +86,7 @@ $files = @(
     (Join-Path $packagePath 'Start-Direct.cmd'),
     (Join-Path $packagePath 'Start-FileTunnel.cmd'),
     (Join-Path $packagePath 'Start-FileTunnel-Remote.cmd'),
+    (Join-Path $packagePath 'ft-options.txt'),
     (Join-Path $packagePath '使用說明.txt'),
     (Join-Path $packagePath 'ThirdParty.txt'),
     (Join-Path $packagePath 'File-Tunnel-LICENSE.md'),

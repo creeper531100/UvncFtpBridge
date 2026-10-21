@@ -159,8 +159,9 @@ public sealed class UvncFileTransfer(RfbConnection conn)
     {
         lock (_op)
         {
-            // size=0 表示不要求壓縮，伺服器會直接送原始資料
-            _c.SendFt(RfbConnection.FtFileTransferRequest, 0, 0, Enc(filePath));
+            // size=1 要求伺服器每塊先 zlib 壓縮（壓了反而變大的塊會自動改送原始資料）。
+            // CSV、log 這類文字檔可以小好幾倍，經跳板時特別有感。
+            _c.SendFt(RfbConnection.FtFileTransferRequest, 0, 1, Enc(filePath));
 
             var header = ReadUntil(RfbConnection.FtFileHeader);
             if (header.Size == FileSizeError && (_c.OldFtProtocol || header.SizeH == FileSizeError))
@@ -191,6 +192,15 @@ public sealed class UvncFileTransfer(RfbConnection conn)
                 }
             }
         }
+    }
+
+    /// <summary>zlib 格式（跟伺服器的 uncompress() 相容）。</summary>
+    internal static byte[] Compress(ReadOnlySpan<byte> data)
+    {
+        using var ms = new MemoryStream();
+        using (var z = new ZLibStream(ms, CompressionLevel.Fastest, leaveOpen: true))
+            z.Write(data);
+        return ms.ToArray();
     }
 
     static void Decompress(byte[] zlibData, Stream dest)
@@ -231,13 +241,16 @@ public sealed class UvncFileTransfer(RfbConnection conn)
             if (accept.Size == FileSizeError)
                 throw new VncException($"伺服器無法建立檔案「{remotePath}」（可能沒有權限、磁碟空間不足或路徑不存在）。");
 
-            // 一塊一塊送（全部未壓縮，size=0）
+            // 一塊一塊送；壓縮後比較小就送 zlib（size=1，伺服器會解開），否則送原始資料（size=0）
             byte[] buf = new byte[ChunkSize];
             int read;
             while ((read = ReadFull(src, buf)) > 0)
             {
-                byte[] chunk = read == buf.Length ? buf : buf.AsSpan(0, read).ToArray();
-                _c.SendFt(RfbConnection.FtFilePacket, 0, 0, chunk);
+                byte[] compressed = Compress(buf.AsSpan(0, read));
+                if (compressed.Length < read)
+                    _c.SendFt(RfbConnection.FtFilePacket, 0, 1, compressed);
+                else
+                    _c.SendFt(RfbConnection.FtFilePacket, 0, 0, read == buf.Length ? buf : buf.AsSpan(0, read).ToArray());
             }
             _c.SendFt(RfbConnection.FtEndOfFile, 0, 0);
         }

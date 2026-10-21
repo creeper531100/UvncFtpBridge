@@ -142,6 +142,16 @@ static class Program
         string? noProxy = Socks5ConnectError(new Socks5Proxy("127.0.0.1", UnusedPort()));
         Check(noProxy?.StartsWith("連不上 SOCKS5 代理") == true, "SOCKS5 代理沒開時報錯");
 
+        // 檔案傳輸壓縮：zlib 格式，伺服器端 uncompress() 能解
+        byte[] text = Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("2026-10-21,LINE01,OK,123.45\r\n", 500)));
+        byte[] packed = Rfb.UvncFileTransfer.Compress(text);
+        using (var unpacked = new MemoryStream())
+        {
+            using (var z = new System.IO.Compression.ZLibStream(new MemoryStream(packed), System.IO.Compression.CompressionMode.Decompress)) z.CopyTo(unpacked);
+            Check(packed[0] == 0x78 && packed.Length < text.Length / 5 && unpacked.ToArray().AsSpan().SequenceEqual(text),
+                $"檔案傳輸 zlib 壓縮（{text.Length} → {packed.Length} bytes）");
+        }
+
         // UltraVNC Repeater：Viewer 送 250 bytes 的「主機:埠」
         Check(VncRepeater.ParseTarget(HostBlock("10.1.2.3:5900")) == ("10.1.2.3", 5900), "Repeater 解析 10.1.2.3:5900");
         Check(VncRepeater.ParseTarget(HostBlock("10.1.2.3:1")) == ("10.1.2.3", 5901), "Repeater 解析 display 編號 :1 → 5901");

@@ -39,6 +39,7 @@ internal sealed class FileTunnelSession : IDisposable
         start.ArgumentList.Add(Path.Combine(shared, "to-remote.dat"));
         start.ArgumentList.Add("--read");
         start.ArgumentList.Add(Path.Combine(shared, "to-local.dat"));
+        foreach (string option in ExtraOptions(baseDir)) start.ArgumentList.Add(option);
         // ft.exe has no console of its own here, so it writes in the system code page (e.g. Big5).
         start.StandardOutputEncoding = start.StandardErrorEncoding =
             System.Text.Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.ANSICodePage);
@@ -79,6 +80,23 @@ internal sealed class FileTunnelSession : IDisposable
             process.Dispose();
             Cleanup(shared);
         }
+    }
+
+    /// <summary>
+    /// Optional ft-options.txt beside the exe (local PC and jump host alike): extra ft.exe arguments for tuning,
+    /// e.g. "--read-duration 200" or "--max-size 104857600". Whitespace-separated; lines starting with # are ignored.
+    /// </summary>
+    internal static IReadOnlyList<string> ExtraOptions(string baseDir)
+    {
+        string path = Path.Combine(baseDir, "ft-options.txt");
+        if (!File.Exists(path)) return [];
+        var options = File.ReadAllLines(path)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .SelectMany(line => line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .ToList();
+        if (options.Count > 0) Log.Info("ft.exe 額外參數（ft-options.txt）：" + string.Join(' ', options));
+        return options;
     }
 
     /// <summary>ft.exe prints "Counterpart: Online/Offline" every second; only log when that state changes.</summary>

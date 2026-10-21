@@ -60,6 +60,10 @@ public static class RemoteCommand
         using var onBreak = PosixSignalRegistration.Create(PosixSignal.SIGQUIT, _ => StopFt());
         using var onLogoff = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => StopFt());
 
+        Log.Silent = true; // ft-options.txt is reported in English below; Log messages are for the local side
+        var extraOptions = FileTunnelSession.ExtraOptions(AppContext.BaseDirectory);
+        Log.Silent = false;
+        if (extraOptions.Count > 0) Console.WriteLine("Extra ft.exe options (ft-options.txt): " + string.Join(' ', extraOptions));
         Console.WriteLine("Waiting for the local File-Tunnel launcher. Close this window or press Ctrl+C to stop.");
         // Each pass serves one local launcher session; when it ends, go back to waiting for the next one.
         while (true)
@@ -83,6 +87,7 @@ public static class RemoteCommand
             start.ArgumentList.Add(Path.Combine(shared, "to-remote.dat"));
             start.ArgumentList.Add("--write");
             start.ArgumentList.Add(Path.Combine(shared, "to-local.dat"));
+            foreach (string option in extraOptions) start.ArgumentList.Add(option);
             using (var process = Process.Start(start) ?? throw new IOException("Could not start ft.exe."))
             {
                 lock (gate) current = process;
