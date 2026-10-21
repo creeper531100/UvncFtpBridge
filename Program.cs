@@ -16,6 +16,14 @@ static class Program
         // 跳板端（可能是 Windows 7）不動主控台編碼，ft.exe 也直接寫在同一個主控台
         if (args.Length > 0 && args[0] is "--remote") return RemoteCommand.Run(args.Skip(1).ToArray());
 
+        // 被 ssh 當 SSH_ASKPASS 呼叫時印一個假密碼就好（SSH 層接受任何密碼）。
+        // 用環境變數 UVNC_ASKPASS 辨識，且排除 --ssh-stdio（ProxyCommand 子程序也會繼承這個環境變數）。
+        if (Environment.GetEnvironmentVariable("UVNC_ASKPASS") == "1" && !(args.Length > 0 && args[0] is "--ssh-stdio"))
+        {
+            Console.Out.Write("uvnc\n");
+            return 0;
+        }
+
         Console.OutputEncoding = Encoding.UTF8;
 
         if (args.Length == 0 || args[0] is "--help" or "-h" or "/?" or "help")
@@ -25,6 +33,8 @@ static class Program
         }
 
         if (args[0] is "--selftest") return SelfTest();
+        if (args[0] is "--ssh-stdio") return SshBridgeCommand.Run(args.Skip(1).ToArray());
+        if (args[0] is "--ssh") return SshLauncherCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "winscp") return WinScpCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "--open" or "--vnc" or "vnc") return TunnelHost.RunCli(args.Skip(1).ToArray());
         if (args.Contains("--ftp")) return RunFtp(args);
@@ -127,6 +137,26 @@ static class Program
         Check(Client.RemotePath.Glob("*.csv").IsMatch("A_2026.CSV") && !Client.RemotePath.Glob("*.csv").IsMatch("a.txt"), "萬用字元 *.csv");
         Check(Client.RemoteSession.ParseHost("10.0.0.5:5901", 5900) == ("10.0.0.5", 5901), "解析 IP:埠");
         Check(Client.RemoteSession.ParseHost("10.0.0.5", 5900) == ("10.0.0.5", 5900), "解析 IP（預設埠）");
+
+        // VNC-SSH：常駐 driver 迴圈腳本
+        string drv = Client.VncShell.BuildDriverScript("C:\\Windows\\Temp\\uvncssh");
+        Check(drv.Contains("param([string]$Mode='user')") && drv.Contains("$dir = 'C:\\Windows\\Temp\\uvncssh'"),
+            "driver 腳本有 Mode 參數與 TEMP 路徑");
+        Check(drv.Contains("instance_$Mode.txt") && drv.Contains("if ($cur -ne $tok) { break }"),
+            "driver 每個模式各自的 instance token，同模式新 driver 接手時舊的退出");
+        Check(drv.Contains("-Filter \"go_$($Mode)_*.flag\"") && drv.Contains(". $cmd *>&1 | Out-String") && drv.Contains("$LASTEXITCODE"),
+            "driver 只輪詢自己模式的觸發檔、dot-source 執行並寫 exit code");
+        Check(drv.Contains("icacls $dir /grant"), "driver 補資料夾權限，管理員寫的輸出 winvnc 也讀得到");
+        Check(drv.Contains("Write-Host ('PS '") && drv.Contains("Write-Host $__uvncOut"),
+            "driver 在機台視窗印出指令與輸出");
+        Check(Client.VncShell.BuildDriverScript("C:\\it's").Contains("$dir = 'C:\\it''s'"),
+            "driver 腳本 TEMP 路徑的單引號有跳脫");
+        // 冷啟動 launcher
+        Check(Client.VncShell.UserLauncher("C:\\T").Contains("-File \"C:\\T\\driver.ps1\" user"),
+            "非管理員 launcher 直接開 driver");
+        Check(Client.VncShell.AdminLauncher("C:\\T").Contains("Start-Process powershell -Verb RunAs") &&
+              Client.VncShell.AdminLauncher("C:\\T").Contains("'admin'"),
+            "管理員 launcher 用 RunAs 觸發 UAC");
 
         // SOCKS5：用本機假代理檢查交握位元組
         Check(Socks5Proxy.Parse("127.0.0.1:1081") == new Socks5Proxy("127.0.0.1", 1081), "SOCKS5 解析 127.0.0.1:1081");

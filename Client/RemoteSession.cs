@@ -41,6 +41,12 @@ public sealed class RemoteSession : IDisposable
         get { EnsureConnected(); return _ft!; }
     }
 
+    /// <summary>取得底層 RFB 連線（送鍵盤／剪貼簿用）；還沒連或已斷線就（重新）連線。和 <see cref="Ft"/> 共用同一條。</summary>
+    public RfbConnection Connection
+    {
+        get { EnsureConnected(); return _conn!; }
+    }
+
     public void EnsureConnected()
     {
         if (_conn is { IsAlive: true }) return;

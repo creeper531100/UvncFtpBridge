@@ -407,6 +407,18 @@ public static class CliCommands
           從 \\tsclient\C 找本機啟動檔的共用資料夾，用旁邊的 ft.exe 接上；本機重開時自動重接。
           本機系統磁碟不是 C 時給磁碟代號，例如 --remote D。
 
+        【VNC-SSH 閘道】（只有 VNC 埠的機台，用 ssh 跑指令、抓 log）
+          UvncFtpBridge --ssh [ultravnc@|root@]<機台> -p <VNC密碼> [指令...]   不給指令就進互動提示字元
+            例: UvncFtpBridge --ssh ultravnc@192.168.1.45 -p 密碼
+                UvncFtpBridge --ssh ultravnc@192.168.1.45 -p 密碼 "Get-Content C:\MES\log.txt -Tail 50"
+                UvncFtpBridge --ssh root@192.168.1.45 -p 密碼       系統管理員（機台跳 UAC，按「是」之前會一直等）
+          原理：機台上開一個常駐的 PowerShell 工作視窗（一般與系統管理員各一個），之後每條指令都在同一個視窗、
+          同一份權限與工作目錄執行；指令與輸出都經檔案傳輸走 TEMP。第一條指令會冷啟動那個視窗（Win+R），
+          之後都不用再動鍵盤。SSH 層接受任何帳密（等同免驗證），真正的門檻是機台 VNC 密碼。
+          可走 UVNC_SOCKS5_PROXY 代理。機台須未鎖屏、有互動桌面，冷啟動才有效；剪貼簿被停用時加 --type。
+
+          進階：UvncFtpBridge --ssh-stdio <機台> -p <密碼>   直接當 ssh 的 ProxyCommand 後端（--ssh 內部用的）。
+
         【其他】
           UvncFtpBridge --selftest   內建自我測試
           UvncFtpBridge --help       顯示這個說明
