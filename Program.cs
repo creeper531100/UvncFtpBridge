@@ -25,6 +25,7 @@ static class Program
         }
 
         if (args[0] is "--selftest") return SelfTest();
+        if (args[0] is "--rc") return VncShellCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "winscp") return WinScpCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "--open" or "--vnc" or "vnc") return TunnelHost.RunCli(args.Skip(1).ToArray());
         if (args.Contains("--ftp")) return RunFtp(args);
@@ -127,6 +128,49 @@ static class Program
         Check(Client.RemotePath.Glob("*.csv").IsMatch("A_2026.CSV") && !Client.RemotePath.Glob("*.csv").IsMatch("a.txt"), "萬用字元 *.csv");
         Check(Client.RemoteSession.ParseHost("10.0.0.5:5901", 5900) == ("10.0.0.5", 5901), "解析 IP:埠");
         Check(Client.RemoteSession.ParseHost("10.0.0.5", 5900) == ("10.0.0.5", 5900), "解析 IP（預設埠）");
+
+        // 互動模式多行輸入：跨行語法判斷（NeedsMore=true 代表還要再讀一行）
+        bool More(string s) => Cli.InputCollector.NeedsMore(s);
+        Check(!More("Get-Date"), "單行完整指令直接送出");
+        Check(More("foreach ($f in $x) {") && !More("foreach ($f in $x) {\n  $f\n}"), "foreach {} 未閉合要續行，補上 } 後完整");
+        Check(More("if ($a) {\n  1\n} else {") && !More("if ($a) {\n  1\n} else {\n  2\n}"), "if/else 跨行");
+        Check(More("$x = @'\nline1") && !More("$x = @'\nline1\n'@"), "here-string 未結束要續行，'@ 在行首才結束");
+        Check(More("Get-Process `") && More("dir |") && More("1,"), "行尾反引號／管線／逗號要續行");
+        Check(!More("Write-Host \"}\"") && !More("Write-Host '{'") && !More("# 註解 {"), "字串與註解裡的括號不算未閉合");
+        Check(!More("$s = 'it''s ok'") && !More("Write-Host \"a`\"b\""), "單引號 '' 跳脫與雙引號反引號跳脫不誤判");
+        // ReadScript：貼上一次收完、續行補到完整為止、空行強制送出
+        var pasted = new Queue<string>(new[] { "foreach ($f in 1..3) {", "  $f", "}" });
+        Check(Cli.InputCollector.ReadScript(() => pasted.Count > 0 ? pasted.Dequeue() : null, () => pasted.Count > 0, () => { })
+              == "foreach ($f in 1..3) {\n  $f\n}", "貼上的多行腳本收成單一腳本");
+        var typed = new Queue<string>(new[] { "if ($a) {", "  1", "}" });
+        Check(Cli.InputCollector.ReadScript(() => typed.Count > 0 ? typed.Dequeue() : null, () => false, () => { })
+              == "if ($a) {\n  1\n}", "逐行輸入時靠續行判斷收成單一腳本");
+
+        // VNC-RC：常駐 driver 迴圈腳本
+        string drv = Client.VncShell.BuildDriverScript("C:\\Windows\\Temp\\uvncrc");
+        Check(drv.Contains("param([string]$Mode='user')") && drv.Contains("$dir = 'C:\\Windows\\Temp\\uvncrc'"),
+            "driver 腳本有 Mode 參數與 TEMP 路徑");
+        Check(drv.Contains("instance_$Mode.txt") && drv.Contains("if ($cur -ne $tok) { break }"),
+            "driver 每個模式各自的 instance token，同模式新 driver 接手時舊的退出");
+        Check(drv.Contains("-Filter \"go_$($Mode)_*.flag\"") && drv.Contains(". $cmd *>&1 | Out-String -Stream") && drv.Contains("$LASTEXITCODE"),
+            "driver 只輪詢自己模式的觸發檔、dot-source 執行並寫 exit code");
+        Check(drv.Contains("icacls $dir /grant"), "driver 補資料夾權限，管理員寫的輸出 winvnc 也讀得到");
+        Check(drv.Contains("Write-Host ('PS '") && drv.Contains("[System.IO.File]::AppendAllText($out"),
+            "driver 在機台視窗印出指令，並逐行串流輸出到 out 檔");
+        Check(Client.VncShell.BuildDriverScript("C:\\it's").Contains("$dir = 'C:\\it''s'"),
+            "driver 腳本 TEMP 路徑的單引號有跳脫");
+        // Ctrl+C 中止：driver 起 killer 看門狗，killer 看到 abort 旗標就砍掉底下正在跑的指令
+        Check(drv.Contains("Start-Process powershell -WindowStyle Hidden") && drv.Contains("'-File',$killer,'-ppid',$PID,'-dir',$dir"),
+            "driver 冷啟動會帶起中止看門狗 killer");
+        string kil = Client.VncShell.BuildKillerScript();
+        Check(kil.Contains("'abort_*.flag'") && kil.Contains("ParentProcessId=$ppid") && kil.Contains("taskkill /PID"),
+            "killer 看到 abort 旗標就砍掉 driver 底下正在跑的指令（Ctrl+C）");
+        // 冷啟動 launcher
+        Check(Client.VncShell.UserLauncher("C:\\T").Contains("-File \"C:\\T\\driver.ps1\" user"),
+            "非管理員 launcher 直接開 driver");
+        Check(Client.VncShell.AdminLauncher("C:\\T").Contains("Start-Process powershell -Verb RunAs") &&
+              Client.VncShell.AdminLauncher("C:\\T").Contains("'admin'"),
+            "管理員 launcher 用 RunAs 觸發 UAC");
 
         // SOCKS5：用本機假代理檢查交握位元組
         Check(Socks5Proxy.Parse("127.0.0.1:1081") == new Socks5Proxy("127.0.0.1", 1081), "SOCKS5 解析 127.0.0.1:1081");

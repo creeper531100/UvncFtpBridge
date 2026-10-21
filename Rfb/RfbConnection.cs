@@ -381,6 +381,37 @@ public sealed class RfbConnection : IDisposable
         catch { }
     }
 
+    // ---------------- 送鍵盤／剪貼簿（用來在遠端模擬打字，給 VNC-RC 用） ----------------
+
+    const byte MsgKeyEvent = 4, MsgClientCutText = 6;
+
+    /// <summary>送一個按鍵事件（X11 keysym）。down=true 按下、false 放開。走同一條連線、同一把送出鎖。</summary>
+    public void SendKeyEvent(uint keysym, bool down)
+    {
+        // rfbKeyEvent：type(1) down-flag(1) pad(2) keysym(4，大端序，和標準 RFB 一致)
+        var m = new byte[8];
+        m[0] = MsgKeyEvent;
+        m[1] = (byte)(down ? 1 : 0);
+        BinaryPrimitives.WriteUInt32BigEndian(m.AsSpan(4, 4), keysym);
+        lock (_sendLock) { _stream.Write(m); _stream.Flush(); }
+    }
+
+    /// <summary>把文字設進伺服器端的剪貼簿（client→server）。之後在遠端按 Ctrl+V 就能貼上，避開輸入法。</summary>
+    public void SendClientCutText(string text)
+    {
+        // 標準 RFB 剪貼簿是 Latin-1（ISO-8859-1）；啟動字串都是 ASCII，無法表示的字元以 '?' 取代。
+        byte[] body = Encoding.Latin1.GetBytes(text);
+        var header = new byte[8];
+        header[0] = MsgClientCutText;                                   // type，後面 3 bytes 補零
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4, 4), (uint)body.Length);
+        lock (_sendLock)
+        {
+            _stream.Write(header);
+            if (body.Length > 0) _stream.Write(body);
+            _stream.Flush();
+        }
+    }
+
     /// <summary>從收訊息佇列取下一則，逾時或連線斷掉就丟例外。</summary>
     public FtMessage TakeFt(int timeoutMs = 60000)
     {
