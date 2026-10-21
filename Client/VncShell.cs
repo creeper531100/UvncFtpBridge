@@ -237,9 +237,19 @@ public static class VncShell
         else VncInput.RunViaClipboard(conn, launcher, opt.Timing);
     }
 
+    /// <summary>
+    /// 帶 BOM 的 UTF-8。Windows PowerShell 5.1 讀沒有 BOM 的 .ps1 會用系統碼頁（Big5），
+    /// 中文後面緊接引號時引號會被吃掉而解析失敗。Encoding.GetBytes 不會自己加 BOM，要手動補上。
+    /// </summary>
+    internal static byte[] EncodeText(string text)
+    {
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        return [.. utf8.GetPreamble(), .. utf8.GetBytes(text)];
+    }
+
     static void UploadText(UvncFileTransfer ft, string remotePath, string text)
     {
-        byte[] bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetBytes(text);
+        byte[] bytes = EncodeText(text);
         using var ms = new MemoryStream(bytes, writable: false);
         ft.Upload(remotePath, ms, bytes.Length, DateTime.UtcNow);
     }

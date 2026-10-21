@@ -171,6 +171,10 @@ static class Program
         Check(Client.VncShell.AdminLauncher("C:\\T").Contains("Start-Process powershell -Verb RunAs") &&
               Client.VncShell.AdminLauncher("C:\\T").Contains("'admin'"),
             "管理員 launcher 用 RunAs 觸發 UAC");
+        byte[] script = Client.VncShell.EncodeText("Write-Output \"共 1 個\"");
+        Check(script.AsSpan(0, 3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF }) &&
+              Encoding.UTF8.GetString(script, 3, script.Length - 3) == "Write-Output \"共 1 個\"",
+            "上傳的指令檔帶 UTF-8 BOM，PowerShell 5.1 不會用 Big5 讀錯中文");
 
         // SOCKS5：用本機假代理檢查交握位元組
         Check(Socks5Proxy.Parse("127.0.0.1:1081") == new Socks5Proxy("127.0.0.1", 1081), "SOCKS5 解析 127.0.0.1:1081");
