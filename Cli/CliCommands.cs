@@ -395,10 +395,17 @@ public static class CliCommands
           UVNC_SOCKS5_PROXY       設為 127.0.0.1:1080 時，所有機台連線經 SOCKS5 代理。
           支援原版 WinSCP 的 USER %user@%host FTP 代理；目標由 WinSCP 主機欄指定。
 
-        【WinSCP 可攜套件】
-          UvncFtpBridge winscp       自動開啟 FTP 橋接與旁邊 WinSCP 資料夾的原版 WinSCP。
-          已預設 FTP、VNC 埠及代理；在 WinSCP 填真實機台 IP 與 VNC 密碼即可。
-          若經 RDP 跳板使用 File-Tunnel，請從 Start-WinSCP-FileTunnel 啟動檔開啟。
+        【可攜套件：WinSCP ＋ UltraVNC 一起開】
+          UvncFtpBridge --open                 直連（Start-Direct.cmd）
+          UvncFtpBridge --open --file-tunnel   經 RDP 跳板（Start-FileTunnel.cmd）
+          開 FTP 橋接（給 WinSCP）與 UltraVNC Repeater（127.0.0.1:5999），再開好 WinSCP 與 UltraVNC Viewer。
+          命令視窗開著就一直可用，關閉 WinSCP 或 Viewer 不影響；按 W／V 再開，按 Q 結束。
+          直連時若設了 UVNC_SOCKS5_PROXY，則經該 SOCKS5 代理。--viewer 可指定其他 vncviewer.exe。
+
+        【跳板端（RDP 跳板上執行）】
+          UvncFtpBridge --remote [磁碟代號 | 完整重新導向路徑]
+          從 \\tsclient\C 找本機啟動檔的共用資料夾，用旁邊的 ft.exe 接上；本機重開時自動重接。
+          本機系統磁碟不是 C 時給磁碟代號，例如 --remote D。
 
         【其他】
           UvncFtpBridge --selftest   內建自我測試

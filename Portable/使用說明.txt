@@ -1,31 +1,37 @@
-UltraVNC 檔案傳輸 — WinSCP 可攜套件
+UltraVNC 機台工具 — WinSCP（傳檔）＋ UltraVNC Viewer（看畫面）可攜套件
 
-1. 先把整個 ZIP 解壓縮到可寫入的資料夾。
-2. 雙擊 Start-WinSCP.vbs，會自動開啟 WinSCP 與背景 CLI 橋接。
-3. 在「新增站台」填真實機台 IP、VNC 埠（預設 5900）及 VNC 密碼。
-4. FTP、不加密、使用者名稱 ultravnc、代理設定都已預設好，不用手動調整。
-5. 可以儲存多個機台站台。設定保存在 WinSCP\WinSCP.ini。
-6. 關閉這份 WinSCP 後，這次啟動的 CLI 橋接會一起結束。
+先把整個 ZIP 解壓縮到可寫入的資料夾。本機只有兩個啟動檔，都會同時開 WinSCP 與 UltraVNC Viewer：
 
-若電腦禁止執行 VBS，改雙擊 Start-WinSCP.cmd；功能相同，會多顯示命令列視窗。
-請從上述啟動檔開啟，讓 CLI 同時啟動；不要直接開 WinSCP 子資料夾的 EXE。
+  Start-Direct.cmd       直連：本機就連得到機台時用。
+  Start-FileTunnel.cmd   經 RDP 跳板：本機連不到機台、要透過跳板時用（會開 ft.exe）。
 
-若要透過 RDP 跳板：
-1. 本機雙擊 Start-WinSCP-FileTunnel.vbs（或 .cmd）。WinSCP 先開啟，本機 File-Tunnel 同時在背景等待跳板。它不會指定跳板 IP，也不會替你開 RDP。
-2. 用 mstsc 連這次要用的跳板。連線前在「顯示選項 → 本機資源 → 詳細資料」勾選本機 C 槽；如果已有 RDP 工作階段，請斷線後重連才會生效。
-3. 把 ft.exe、Start-FileTunnel-Remote.cmd 與 Start-FileTunnel-Remote.ps1 複製到跳板的同一資料夾，雙擊遠端 CMD；保持黑色視窗開著。若本機系統磁碟不是 C，從命令列給它其他磁碟代號，例如 Start-FileTunnel-Remote.cmd D。
-4. 在本機 WinSCP 填目標機台的真實 IP、VNC 埠及密碼，按登入。若先按登入而失敗，跳板端啟動後再按一次。
-資料檔只放在本機 %TEMP%\UvncFtpBridge\FileTunnel，關閉 WinSCP 後會嘗試清除。跳板端會從 \\tsclient\C 自動找出目前使用者的 TEMP 路徑；磁碟路徑沒有 $。若 TEMP 位置被自訂，請把完整重新導向路徑當作遠端 CMD 的參數。
-本機 File-Tunnel SOCKS5 只聽 127.0.0.1:1081；關閉由此入口開啟的 WinSCP 後，本機隧道一併結束；跳板端不會結束，會自動回到等待，下次在本機重開啟動檔即可接上。RDP 斷線重連後也會自動接回。不用時再自行關閉跳板端 CMD 視窗。
+共通用法：
+1. 雙擊其中一個啟動檔。會開一個命令視窗，並自動開好 WinSCP 與 UltraVNC Viewer。
+2. WinSCP：在「新增站台」填機台 IP、VNC 埠（預設 5900）及 VNC 密碼後登入。FTP、使用者名稱 ultravnc、代理都已預設好，不用調整。站台設定存在 WinSCP\WinSCP.ini。
+3. UltraVNC Viewer：連線方式已預選「Repeater」，在伺服器欄填機台 IP（例如 10.1.2.3；非 5900 埠寫 10.1.2.3::5901），按 Connect，再輸入 VNC 密碼。
+4. 命令視窗開著就一直可用；關閉 WinSCP 或 Viewer 不影響。可以把 WinSCP\WinSCP.exe 與 UltraVNC\vncviewer.exe 釘選到工作列，之後直接從工作列開（命令視窗要先開著）。也可以在命令視窗按 W 再開 WinSCP、按 V 再開 Viewer。
+5. 用完按 Q 或直接關閉命令視窗，全部一起結束。
+同一份套件再雙擊一次啟動檔，不會重複起服務，只會再開一次 WinSCP 與 Viewer。
+
+經 RDP 跳板（Start-FileTunnel.cmd）另外要做：
+1. 用 mstsc 連這次要用的跳板。連線前在「顯示選項 → 本機資源 → 詳細資料」勾選本機 C 槽；如果已有 RDP 工作階段，請斷線後重連才會生效。啟動檔不會替你開 RDP。
+2. 把 UvncFtpBridge.exe、ft.exe 與 Start-FileTunnel-Remote.cmd 複製到跳板的同一資料夾，雙擊 Start-FileTunnel-Remote.cmd，保持黑色視窗開著。跳板端不需要 PowerShell 或 .NET，Windows 7 也可用。若本機系統磁碟不是 C，從命令列給它磁碟代號，例如 Start-FileTunnel-Remote.cmd D；若 TEMP 位置被自訂，給完整的重新導向路徑。
+3. 剛啟動時跳板端要十幾秒才會連上；這段期間在 Viewer 按 Connect 會自動等待（最多 30 秒）。WinSCP 若先登入失敗，等跳板端連上後再按一次。
+跳板端不會自己結束：本機關閉後它會回到等待，下次本機重開啟動檔就自動接上，RDP 斷線重連後也會接回。不用時再關掉跳板端視窗。
 一次只對應一個跳板；切換跳板時先關閉舊跳板端，再於新的跳板啟動。
-此入口只將 VNC 連線經 SOCKS5／共用檔案傳送；WinSCP 與橋接程式之間的 FTP 仍在本機。代理或跳板不可用時會報錯，不會自動改成直連。
-啟動失敗時可查看 Logs\launcher.log，或用 CMD 啟動檔查看錯誤。
+資料檔只放在本機 %TEMP%\UvncFtpBridge\FileTunnel，結束時會嘗試清除。本機 File-Tunnel 只聽 127.0.0.1:1081，跳板不可用時會報錯，不會自動改成直連。
 
-速度調整：本機與跳板可各自在 ft.exe 旁放 ft-options.txt。每行可寫一個或多個 ft.exe 參數，# 開頭的行會略過。套件內附註解範本；改完後重開對應的啟動檔。下載速度主要受跳板端設定影響，上傳主要受本機設定影響。
-WinSCP 傳檔會自動要求 zlib 壓縮，CSV、log 這類文字檔傳得比較快。
-
-機台需開啟 UltraVNC File Transfer，並使用完整權限的 VNC 密碼。
-套件不預存任何機台 IP 或密碼，協定名稱顯示為原版 WinSCP 的 FTP。
+其他說明：
+- 本機服務只聽 127.0.0.1：UltraVNC Repeater 用 5999 埠，WinSCP 橋接用系統分配的埠。
+- 套件內的 Viewer 設定存在 UltraVNC\options.vnc，每次從啟動檔開都會重新預選 Repeater。若改用電腦已安裝的 UltraVNC Viewer，請自行選「Repeater」並填 127.0.0.1:5999。
+- 啟動失敗時可查看 Logs\launcher.log。
+- 經跳板的速度主要受 RDP 磁碟重新導向限制。要調整 ft.exe，在 UvncFtpBridge.exe 旁邊放 ft-options.txt，寫入額外參數（空白分隔，# 開頭為註解），本機與跳板各放一份，例如：
+    --read-duration 200
+    --citrix
+  下載速度主要看跳板端那份，上傳主要看本機那份。改完重開對應的啟動檔即可。
+- WinSCP 傳檔會自動要求 zlib 壓縮，CSV、log 這類文字檔傳得比較快。
+- 機台需開啟 UltraVNC Server 與 File Transfer，並使用完整權限的 VNC 密碼。
+- 套件不預存任何機台 IP 或密碼。
 
 CLI 直接使用：
   UvncFtpBridge.exe --help
@@ -34,3 +40,5 @@ CLI 直接使用：
 
 WinSCP 為官方未修改的可攜版；授權文件在 WinSCP\license.txt。
 官方網站：https://winscp.net/
+UltraVNC Viewer 為官方未修改、有數位簽章的 1.4.3.6 版；授權文件在 UltraVNC\Licence.rtf（GPL v2）。
+官方網站：https://uvnc.com/

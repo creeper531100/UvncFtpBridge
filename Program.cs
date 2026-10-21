@@ -13,6 +13,9 @@ static class Program
         // 讓 CP950（Big5）可用，給不支援 UTF-8 的舊版 UltraVNC 伺服器用
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
+        // 跳板端（可能是 Windows 7）不動主控台編碼，ft.exe 也直接寫在同一個主控台
+        if (args.Length > 0 && args[0] is "--remote") return RemoteCommand.Run(args.Skip(1).ToArray());
+
         Console.OutputEncoding = Encoding.UTF8;
 
         if (args.Length == 0 || args[0] is "--help" or "-h" or "/?" or "help")
@@ -23,6 +26,7 @@ static class Program
 
         if (args[0] is "--selftest") return SelfTest();
         if (args[0] is "winscp") return WinScpCommand.Run(args.Skip(1).ToArray());
+        if (args[0] is "--open" or "--vnc" or "vnc") return TunnelHost.RunCli(args.Skip(1).ToArray());
         if (args.Contains("--ftp")) return RunFtp(args);
 
         return CliCommands.Run(args);
@@ -95,6 +99,7 @@ static class Program
 
     static int SelfTest()
     {
+        Log.Silent = true;
         int fail = 0;
         void Check(bool ok, string what) { Console.WriteLine($"[{(ok ? "PASS" : "FAIL")}] {what}"); if (!ok) fail++; }
 
@@ -147,6 +152,16 @@ static class Program
                 $"檔案傳輸 zlib 壓縮（{text.Length} → {packed.Length} bytes）");
         }
 
+        // UltraVNC Repeater：Viewer 送 250 bytes 的「主機:埠」
+        Check(VncRepeater.ParseTarget(HostBlock("10.1.2.3:5900")) == ("10.1.2.3", 5900), "Repeater 解析 10.1.2.3:5900");
+        Check(VncRepeater.ParseTarget(HostBlock("10.1.2.3:1")) == ("10.1.2.3", 5901), "Repeater 解析 display 編號 :1 → 5901");
+        Check(VncRepeater.ParseTarget(HostBlock("ID:1234")) == null, "Repeater 拒絕 ID 模式");
+        Check(VncRepeater.ParseTarget(new byte[250]) == null, "Repeater 拒絕空白位址");
+        string? relay = RepeaterExchange(ipv4Request, 0);
+        Check(relay == null, "Repeater 經 SOCKS5 雙向轉送" + (relay == null ? "" : "：" + relay));
+        relay = RepeaterExchange(ipv4Request, 1500);
+        Check(relay == null, "Repeater 等代理晚 1.5 秒才開（跳板端還沒連上）" + (relay == null ? "" : "：" + relay));
+
         Console.WriteLine(fail == 0 ? "\n全部通過。" : $"\n有 {fail} 項失敗。");
         return fail == 0 ? 0 : 1;
     }
@@ -155,6 +170,70 @@ static class Program
     {
         try { act(); return false; }
         catch (T) { return true; }
+    }
+
+    static byte[] HostBlock(string text)
+    {
+        byte[] block = new byte[250];
+        Encoding.UTF8.GetBytes(text).CopyTo(block, 0);
+        return block;
+    }
+
+    /// <summary>假 Viewer → Repeater → 假 SOCKS5：檢查交握、CONNECT 位元組與兩個方向的資料。</summary>
+    static string? RepeaterExchange(byte[] expectedRequest, int proxyDelayMs)
+    {
+        var socks = new System.Net.Sockets.TcpListener(IPAddress.Loopback, UnusedPort());
+        if (proxyDelayMs == 0) socks.Start();
+        bool requestOk = false;
+        var fakeProxy = Task.Run(() =>
+        {
+            if (proxyDelayMs > 0)
+            {
+                Thread.Sleep(proxyDelayMs);
+                socks.Start();
+            }
+            using var peer = socks.AcceptTcpClient();
+            var s = peer.GetStream();
+            byte[] greeting = new byte[3];
+            s.ReadExactly(greeting);
+            s.Write(new byte[] { 5, 0 });
+            byte[] request = new byte[expectedRequest.Length];
+            s.ReadExactly(request);
+            requestOk = greeting.AsSpan().SequenceEqual(new byte[] { 5, 1, 0 }) && request.AsSpan().SequenceEqual(expectedRequest);
+            s.Write(new byte[] { 5, 0, 0, 1, 0, 0, 0, 0, 0, 0 });
+            s.Write("RFB"u8);
+            int b = s.ReadByte();
+            s.WriteByte((byte)(b + 1));
+        });
+        using var stop = new CancellationTokenSource();
+        var repeater = new VncRepeater(IPAddress.Loopback, 0, new Socks5Proxy("127.0.0.1", ((IPEndPoint)socks.LocalEndpoint).Port));
+        repeater.Start();
+        Task serve = repeater.RunAsync(stop.Token);
+        try
+        {
+            using var viewer = new System.Net.Sockets.TcpClient();
+            viewer.Connect(IPAddress.Loopback, repeater.Port);
+            viewer.ReceiveTimeout = 3000 + proxyDelayMs * 2;
+            var vs = viewer.GetStream();
+            byte[] hello = new byte[12];
+            vs.ReadExactly(hello);
+            if (Encoding.ASCII.GetString(hello) != "RFB 000.000\n") return "Repeater 版本字串不對";
+            vs.Write(HostBlock("10.1.2.3:5900"));
+            byte[] data = new byte[3];
+            vs.ReadExactly(data);
+            if (Encoding.ASCII.GetString(data) != "RFB") return "機台→Viewer 方向沒轉送";
+            vs.WriteByte(41);
+            if (vs.ReadByte() != 42) return "Viewer→機台方向沒轉送";
+            fakeProxy.Wait(3000 + proxyDelayMs);
+            return requestOk ? null : "CONNECT 位元組不符";
+        }
+        catch (IOException ex) { return ex.Message; }
+        finally
+        {
+            stop.Cancel();
+            try { serve.Wait(3000); } catch (AggregateException) { }
+            socks.Stop();
+        }
     }
 
     static int UnusedPort()

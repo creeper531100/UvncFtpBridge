@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import zlib
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -87,6 +88,7 @@ class Machine:
                 upload_path = None
                 upload = bytearray()
                 download = None
+                download_compress = False
                 while True:
                     msg = exact(conn, 1)[0]
                     if msg == 0:
@@ -134,18 +136,21 @@ class Machine:
                         ft(conn, 2)
                     elif kind == 3:
                         download = self.files.get(path)
+                        download_compress = size == 1
                         ft(conn, 4, size=len(download) if download is not None else 0xFFFFFFFF,
                            data=data, tail=struct.pack(">I", 0 if download is not None else 0xFFFFFFFF))
                     elif kind == 4:
                         assert download is not None
-                        ft(conn, 5, data=download)
+                        packed = zlib.compress(download) if download_compress else download
+                        ft(conn, 5, size=1 if len(packed) < len(download) else 0,
+                           data=packed if len(packed) < len(download) else download)
                         ft(conn, 6)
                     elif kind == 8:
                         upload_path = path.rsplit(",", 1)[0]
                         upload = bytearray()
                         ft(conn, 9)
                     elif kind == 5:
-                        upload.extend(data)
+                        upload.extend(zlib.decompress(data) if size == 1 else data)
                     elif kind == 6:
                         assert upload_path
                         self.files[upload_path] = bytes(upload)
