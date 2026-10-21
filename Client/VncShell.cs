@@ -14,6 +14,8 @@ public sealed record ShellOptions
     public bool KeepFiles { get; init; }
     /// <summary>等單一指令跑完的上限（毫秒），從 driver 接手指令開始算。</summary>
     public int TimeoutMs { get; init; } = 120_000;
+    /// <summary>一般 driver 冷啟動後等它接手指令的上限（毫秒）；和 <see cref="TimeoutMs"/> 分開，指令不限時也不會卡在啟動失敗。</summary>
+    public int StartTimeoutMs { get; init; } = 120_000;
     public VncInput.InputTiming Timing { get; init; } = VncInput.InputTiming.Default;
 }
 
@@ -110,8 +112,8 @@ public static class VncShell
             if (!aborted)
             {
                 if (deadline is long d && Environment.TickCount64 > d) break;
-                // 一般 driver 冷啟動也只等這麼久；系統管理員要等人按 UAC，沒有上限
-                if (deadline == null && !admin && coldStarted && Environment.TickCount64 > graceDeadline + opt.TimeoutMs) break;
+                // 一般 driver 冷啟動只等 StartTimeoutMs；系統管理員要等人按 UAC，沒有上限
+                if (deadline == null && !admin && coldStarted && Environment.TickCount64 > graceDeadline + opt.StartTimeoutMs) break;
             }
 
             List<RemoteEntry> entries;

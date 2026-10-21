@@ -16,14 +16,6 @@ static class Program
         // 跳板端（可能是 Windows 7）不動主控台編碼，ft.exe 也直接寫在同一個主控台
         if (args.Length > 0 && args[0] is "--remote") return RemoteCommand.Run(args.Skip(1).ToArray());
 
-        // 被 ssh 當 SSH_ASKPASS 呼叫時印一個假密碼就好（SSH 層接受任何密碼）。
-        // 用環境變數 UVNC_ASKPASS 辨識，且排除 --ssh-stdio（ProxyCommand 子程序也會繼承這個環境變數）。
-        if (Environment.GetEnvironmentVariable("UVNC_ASKPASS") == "1" && !(args.Length > 0 && args[0] is "--ssh-stdio"))
-        {
-            Console.Out.Write("uvnc\n");
-            return 0;
-        }
-
         Console.OutputEncoding = Encoding.UTF8;
 
         if (args.Length == 0 || args[0] is "--help" or "-h" or "/?" or "help")
@@ -33,8 +25,7 @@ static class Program
         }
 
         if (args[0] is "--selftest") return SelfTest();
-        if (args[0] is "--ssh-stdio") return SshBridgeCommand.Run(args.Skip(1).ToArray());
-        if (args[0] is "--ssh") return SshLauncherCommand.Run(args.Skip(1).ToArray());
+        if (args[0] is "--ssh" or "--shell") return VncShellCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "winscp") return WinScpCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "--open" or "--vnc" or "vnc") return TunnelHost.RunCli(args.Skip(1).ToArray());
         if (args.Contains("--ftp")) return RunFtp(args);
