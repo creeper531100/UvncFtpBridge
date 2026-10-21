@@ -25,3 +25,10 @@ Download: https://uvnc.com/downloads/ultravnc/159-ultravnc-1-4-3-6.html
 Official source repository: https://github.com/ultravnc/UltraVNC
 UvncFtpBridge only starts this viewer and writes UseProxy/proxyhost/proxyport to UltraVNC\options.vnc;
 the viewer binary has not been modified or rebuilt.
+
+Win32-OpenSSH 10.0.0.0p2-Preview (official, unmodified client and portable server)
+Publisher: Microsoft Corporation
+Website: https://github.com/PowerShell/Win32-OpenSSH
+Download: https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip
+Archive SHA-256: 23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5
+License and notices: OpenSSH\LICENSE.txt, OpenSSH\NOTICE.txt

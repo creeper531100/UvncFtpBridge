@@ -343,7 +343,10 @@ public sealed class RfbConnection : IDisposable
     {
         byte[] h = ReadExact(7); // pad(3)+length(4)
         int len = (int)BinaryPrimitives.ReadUInt32BigEndian(h.AsSpan(3, 4));
-        if (len > 0) ReadExact(len);
+        // Extended clipboard packets use a negative length; skip their body as well.
+        long length = Math.Abs((long)len);
+        if (length > 4 * 1024 * 1024) throw new VncException("伺服器剪貼簿長度無效。");
+        if (length > 0) ReadExact((int)length);
     }
 
     void SkipTextChat()
@@ -379,6 +382,21 @@ public sealed class RfbConnection : IDisposable
         if (_closed) return;
         try { lock (_sendLock) { _stream.WriteByte(MsgKeepAlive); _stream.Flush(); } }
         catch { }
+    }
+
+    // ---------------- 送鍵盤／剪貼簿（用來在遠端模擬打字，給 VNC-SSH 用） ----------------
+
+    const byte MsgKeyEvent = 4;
+
+    /// <summary>送一個按鍵事件（X11 keysym）。down=true 按下、false 放開。走同一條連線、同一把送出鎖。</summary>
+    public void SendKeyEvent(uint keysym, bool down)
+    {
+        // rfbKeyEvent：type(1) down-flag(1) pad(2) keysym(4，大端序，和標準 RFB 一致)
+        var m = new byte[8];
+        m[0] = MsgKeyEvent;
+        m[1] = (byte)(down ? 1 : 0);
+        BinaryPrimitives.WriteUInt32BigEndian(m.AsSpan(4, 4), keysym);
+        lock (_sendLock) { _stream.Write(m); _stream.Flush(); }
     }
 
     /// <summary>從收訊息佇列取下一則，逾時或連線斷掉就丟例外。</summary>

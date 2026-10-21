@@ -1,5 +1,7 @@
 # UltraVNC FTP Bridge — CLI 與 WinSCP ＋ UltraVNC 可攜套件
 
+新增的真正 SSH 經 VNC / File-Tunnel 原型、使用條件與驗證範圍，見 [VNC-SSH-TUNNEL.zh-TW.md](VNC-SSH-TUNNEL.zh-TW.md)。舊版 FxSsh shell 已備份於 `backup/vnc-ssh-fxssh`。
+
 這個專案只有 C# CLI，沒有自製 UI，也不包含 WinSCP 原始碼或 C++Builder 建置流程。可攜套件使用官方未修改的 WinSCP 6.7、預設 INI 與官方 UltraVNC Viewer 1.4.3.6。
 
 ## 給其他事業處使用

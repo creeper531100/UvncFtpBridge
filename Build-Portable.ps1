@@ -42,6 +42,25 @@ if ((Get-FileHash -LiteralPath $ftCache -Algorithm SHA256).Hash -ne $ftHash) {
     throw 'File-Tunnel SHA-256 does not match the pinned release checksum.'
 }
 Copy-Item -LiteralPath $ftCache -Destination (Join-Path $packagePath 'ft.exe') -Force
+$sshVersion = '10.0.0.0p2-Preview'
+$sshHash = '23F50F3458C4C5D0B12217C6A5DDFDE0137210A30FA870E98B29827F7B43ABA5'
+$sshArchive = Join-Path $cachePath "OpenSSH-$sshVersion-Win64.zip"
+if (-not (Test-Path -LiteralPath $sshArchive)) {
+    Invoke-WebRequest -Uri "https://github.com/PowerShell/Win32-OpenSSH/releases/download/$sshVersion/OpenSSH-Win64.zip" -OutFile $sshArchive
+}
+if ((Get-FileHash -LiteralPath $sshArchive -Algorithm SHA256).Hash -ne $sshHash) { throw 'OpenSSH archive SHA-256 mismatch.' }
+$sshExtract = Join-Path $cachePath "OpenSSH-$sshVersion"
+Expand-Archive -LiteralPath $sshArchive -DestinationPath $sshExtract -Force
+$sshPath = Join-Path $packagePath 'OpenSSH'
+New-Item -ItemType Directory -Path $sshPath -Force | Out-Null
+foreach ($name in @('ssh.exe','libcrypto.dll','LICENSE.txt','NOTICE.txt','sshd.exe','sshd-auth.exe','sshd-session.exe','ssh-shellhost.exe','ssh-keygen.exe','sftp-server.exe')) {
+    $source = Join-Path $sshExtract "OpenSSH-Win64\$name"
+    if ($name -match '\.(exe|dll)$') {
+        $sig = Get-AuthenticodeSignature -LiteralPath $source
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { throw "Invalid OpenSSH signature: $name" }
+    }
+    Copy-Item -LiteralPath $source -Destination $sshPath -Force
+}
 $viewerVersion = '1.4.3.6'
 if (-not (Test-Path -LiteralPath $VncViewerPath)) { throw "UltraVNC Viewer not found: $VncViewerPath (install UltraVNC $viewerVersion or pass -VncViewerPath)." }
 $viewerSignature = Get-AuthenticodeSignature -LiteralPath $VncViewerPath
@@ -69,6 +88,7 @@ Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\WinSCP.ini') -Destination 
 foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','ft-options.txt','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath
 }
+Copy-Item -LiteralPath (Join-Path $rootPath 'VNC-SSH-TUNNEL.zh-TW.md') -Destination $packagePath -Force
 # Drop entry points from earlier builds: two launchers (direct / File-Tunnel) now open WinSCP and UltraVNC together,
 # and the jump-host side runs as "UvncFtpBridge.exe --remote" instead of a PowerShell script.
 foreach ($old in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-VNC-FileTunnel.cmd','Start-FileTunnel-Remote.ps1')) {
@@ -90,7 +110,9 @@ $files = @(
     (Join-Path $packagePath '使用說明.txt'),
     (Join-Path $packagePath 'ThirdParty.txt'),
     (Join-Path $packagePath 'File-Tunnel-LICENSE.md'),
+    (Join-Path $packagePath 'VNC-SSH-TUNNEL.zh-TW.md'),
     (Join-Path $packagePath 'ft.exe'),
+    $sshPath,
     $clientPath,
     $viewerPath
 )

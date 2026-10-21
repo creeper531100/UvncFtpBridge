@@ -25,6 +25,8 @@ static class Program
         }
 
         if (args[0] is "--selftest") return SelfTest();
+        if (args[0] is "--vnc-file-relay") return VncFileRelayCommand.Run(args.Skip(1).ToArray());
+        if (args[0] is "--ssh") return SshTunnelCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "winscp") return WinScpCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "--open" or "--vnc" or "vnc") return TunnelHost.RunCli(args.Skip(1).ToArray());
         if (args.Contains("--ftp")) return RunFtp(args);

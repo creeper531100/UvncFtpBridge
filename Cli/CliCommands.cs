@@ -407,6 +407,13 @@ public static class CliCommands
           從 \\tsclient\C 找本機啟動檔的共用資料夾，用旁邊的 ft.exe 接上；本機重開時自動重接。
           本機系統磁碟不是 C 時給磁碟代號，例如 --remote D。
 
+        【SSH 經 VNC File-Tunnel（原型）】
+          UvncFtpBridge --ssh <Windows使用者@機台> -p <VNC密碼> [--admin] [--identity 私鑰] [--ssh-port 22] [指令...]
+          自動上傳可攜 sshd 與 ft；機台不需預先安裝 SSH Server。首次連線須有可操作桌面。
+          帳號必須是機台目前桌面的 Windows 帳號；--admin 會在機台跳 UAC，按「是」之後 SSH 才有系統管理員權限。SSH 使用本次臨時金鑰，檔案都放機台 %TEMP%\UvncFtpBridge\SshTunnel\<ID>。
+          --ssh-port n 改連機台既有 sshd，這個模式使用原本的 Windows 帳密或 --identity 金鑰。
+          詳見 VNC-SSH-TUNNEL.zh-TW.md。
+
         【其他】
           UvncFtpBridge --selftest   內建自我測試
           UvncFtpBridge --help       顯示這個說明
