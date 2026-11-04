@@ -65,6 +65,29 @@ $cliFiles = @(if ($FrameworkDependent) {
     Get-Item -LiteralPath (Join-Path $rootPath 'dist\UvncFtpBridge.exe')
 })
 foreach ($cliFile in $cliFiles) { Copy-Item -LiteralPath $cliFile.FullName -Destination $packagePath }
+# noVNC (served by --open for mRemoteNG tabs): official release, unmodified, beside the exe in noVNC\.
+# Only defaults.json (noVNC's site-settings file) is ours: autoconnect + scale to the tab.
+$noVncVersion = '1.7.0'
+$noVncHash = 'D55E9CCE9A611294DF33C7200F32F35108652DE2D86A468BEBCFC6F2A1C9A196'
+$noVncZip = Join-Path $cachePath "noVNC-$noVncVersion.zip"
+if (-not (Test-Path -LiteralPath $noVncZip)) {
+    Invoke-WebRequest -Uri "https://github.com/novnc/noVNC/archive/refs/tags/v$noVncVersion.zip" -OutFile $noVncZip
+}
+if ((Get-FileHash -LiteralPath $noVncZip -Algorithm SHA256).Hash -ne $noVncHash) {
+    throw 'noVNC SHA-256 does not match the pinned release checksum.'
+}
+$noVncExtract = Join-Path $cachePath "noVNC-$noVncVersion"
+Remove-Item -LiteralPath $noVncExtract -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive -LiteralPath $noVncZip -DestinationPath $noVncExtract -Force
+$noVncSource = Join-Path $noVncExtract "noVNC-$noVncVersion"
+$noVncPath = Join-Path $packagePath 'noVNC'
+Remove-Item -LiteralPath $noVncPath -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $noVncPath -Force | Out-Null
+# package.json is fetched by vnc.html to show the noVNC version.
+foreach ($item in @('vnc.html','app','core','vendor','mandatory.json','package.json','LICENSE.txt','AUTHORS')) {
+    Copy-Item -LiteralPath (Join-Path $noVncSource $item) -Destination $noVncPath -Recurse -Force
+}
+Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\noVNC-defaults.json') -Destination (Join-Path $noVncPath 'defaults.json') -Force
 Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\WinSCP.ini') -Destination $clientPath
 foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','ft-options.txt','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath
@@ -73,6 +96,10 @@ foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-
 # and the jump-host side runs as "UvncFtpBridge.exe --remote" instead of a PowerShell script.
 foreach ($old in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-VNC-FileTunnel.cmd','Start-FileTunnel-Remote.ps1')) {
     Remove-Item -LiteralPath (Join-Path $packagePath $old) -ErrorAction SilentlyContinue
+}
+# Leftovers of the removed VNC-SSH gateway and of the earlier hand-written noVNC page.
+foreach ($old in @('OpenSSH','VNC-SSH-TUNNEL.zh-TW.md','vnc.html')) {
+    Remove-Item -LiteralPath (Join-Path $packagePath $old) -Recurse -Force -ErrorAction SilentlyContinue
 }
 if ($FrameworkDependent) {
     $instructionsPath = Join-Path $packagePath '使用說明.txt'
@@ -91,6 +118,7 @@ $files = @(
     (Join-Path $packagePath 'ThirdParty.txt'),
     (Join-Path $packagePath 'File-Tunnel-LICENSE.md'),
     (Join-Path $packagePath 'ft.exe'),
+    $noVncPath,
     $clientPath,
     $viewerPath
 )

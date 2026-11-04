@@ -25,3 +25,15 @@ Download: https://uvnc.com/downloads/ultravnc/159-ultravnc-1-4-3-6.html
 Official source repository: https://github.com/ultravnc/UltraVNC
 UvncFtpBridge only starts this viewer and writes UseProxy/proxyhost/proxyport to UltraVNC\options.vnc;
 the viewer binary has not been modified or rebuilt.
+
+noVNC 1.7.0 (official release, unmodified)
+Publisher: The noVNC authors (noVNC\AUTHORS)
+Website: https://novnc.com/
+Source repository: https://github.com/novnc/noVNC
+License: noVNC\LICENSE.txt (core MPL 2.0; other parts as listed in that file, e.g. vendor/pako MIT)
+Download: https://github.com/novnc/noVNC/archive/refs/tags/v1.7.0.zip
+SHA-256: d55e9cce9a611294df33c7200f32f35108652de2d86a468bebcfc6f2a1c9a196
+Included: vnc.html, app\, core\, vendor\, mandatory.json, package.json, LICENSE.txt, AUTHORS.
+noVNC\defaults.json (noVNC's site-settings file) is this package's own: autoconnect, resize=scale, show_dot.
+UvncFtpBridge serves these files from 127.0.0.1 and relays the noVNC WebSocket to the machine;
+the noVNC files have not been modified.

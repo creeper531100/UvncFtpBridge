@@ -6,7 +6,7 @@ using UvncFtpBridge.Rfb;
 namespace UvncFtpBridge.Cli;
 
 /// <summary>
-/// 命令列模式。輸出規則（方便 SSH / AI 使用）：
+/// 命令列模式。輸出規則（方便指令稿 / AI 使用）：
 ///   成功結果 → stdout；進度與錯誤 → stderr；結束碼 0=成功、1=失敗、2=用法錯誤。
 /// </summary>
 public static class CliCommands
@@ -398,26 +398,25 @@ public static class CliCommands
         【可攜套件：WinSCP ＋ UltraVNC 一起開】
           UvncFtpBridge --open                 直連（Start-Direct.cmd）
           UvncFtpBridge --open --file-tunnel   經 RDP 跳板（Start-FileTunnel.cmd）
-          開 FTP 橋接（給 WinSCP）與 UltraVNC Repeater（127.0.0.1:5999），再開好 WinSCP 與 UltraVNC Viewer。
+          開 FTP 橋接（給 WinSCP）、UltraVNC Repeater（127.0.0.1:5999）與 noVNC（http://127.0.0.1:6080），
+          再開好 WinSCP 與 UltraVNC Viewer。noVNC 給 mRemoteNG 用，見下方【noVNC】。
           命令視窗開著就一直可用，關閉 WinSCP 或 Viewer 不影響；按 W／V 再開，按 Q 結束。
           直連時若設了 UVNC_SOCKS5_PROXY，則經該 SOCKS5 代理。--viewer 可指定其他 vncviewer.exe。
+
+        【noVNC（給 mRemoteNG 等嵌入瀏覽器分頁）】
+          --open 已經一起開好；只要 noVNC 時可單獨開：UvncFtpBridge --novnc [--file-tunnel] [--port 6080]
+          在 mRemoteNG 新增「HTTP/HTTPS」連線，網址填（官方 noVNC 原版頁面）：
+            http://127.0.0.1:6080/vnc.html?path=ws/<機台IP>          非 5900 埠：path=ws/<機台IP>:5901
+          機台 IP 由 path 帶，直接嵌進分頁、自動連線並縮放到分頁大小；密碼由 noVNC 詢問。
+          其他 noVNC 參數照官方用法，例如 &password=<密碼>、&view_only=true。不要加 reconnect=true：
+          密碼錯時會一直重試，機台 UltraVNC 會暫時封鎖這個來源 IP。
+          直連時若設了 UVNC_SOCKS5_PROXY 則經該 SOCKS5 代理；--file-tunnel 經 RDP 跳板。
+          noVNC 檔案在 exe 旁的 noVNC\（Build-Portable.ps1 下載）；mRemoteNG 的瀏覽器需為 WebView2。
 
         【跳板端（RDP 跳板上執行）】
           UvncFtpBridge --remote [磁碟代號 | 完整重新導向路徑]
           從 \\tsclient\C 找本機啟動檔的共用資料夾，用旁邊的 ft.exe 接上；本機重開時自動重接。
           本機系統磁碟不是 C 時給磁碟代號，例如 --remote D。
-
-        【VNC-SSH 閘道】（只有 VNC 埠的機台，用 ssh 跑指令、抓 log）
-          UvncFtpBridge --ssh [ultravnc@|root@]<機台> -p <VNC密碼> [指令...]   不給指令就進互動提示字元
-            例: UvncFtpBridge --ssh ultravnc@192.168.1.45 -p 密碼
-                UvncFtpBridge --ssh ultravnc@192.168.1.45 -p 密碼 "Get-Content C:\MES\log.txt -Tail 50"
-                UvncFtpBridge --ssh root@192.168.1.45 -p 密碼       系統管理員（機台跳 UAC，按「是」之前會一直等）
-          原理：機台上開一個常駐的 PowerShell 工作視窗（一般與系統管理員各一個），之後每條指令都在同一個視窗、
-          同一份權限與工作目錄執行；指令與輸出都經檔案傳輸走 TEMP。第一條指令會冷啟動那個視窗（Win+R），
-          之後都不用再動鍵盤。SSH 層接受任何帳密（等同免驗證），真正的門檻是機台 VNC 密碼。
-          可走 UVNC_SOCKS5_PROXY 代理。機台須未鎖屏、有互動桌面，冷啟動才有效；剪貼簿被停用時加 --type。
-
-          進階：UvncFtpBridge --ssh-stdio <機台> -p <密碼>   直接當 ssh 的 ProxyCommand 後端（--ssh 內部用的）。
 
         【其他】
           UvncFtpBridge --selftest   內建自我測試

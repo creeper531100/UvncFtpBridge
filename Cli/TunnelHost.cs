@@ -94,14 +94,28 @@ internal static class TunnelHost
                 ftp.Start();
                 services.Add(Task.Run(() => ftp.Run(stop.Token)));
                 File.WriteAllText(portFile, ftp.Port.ToString(CultureInfo.InvariantCulture));
+                // noVNC（給 mRemoteNG 嵌入分頁）共用同一個代理；開不起來只警告，不影響 WinSCP 與 UltraVNC
+                NoVncBridge? novnc = new NoVncBridge(baseDir, NoVncBridge.DefaultPort, proxy);
+                try
+                {
+                    novnc.Start();
+                    services.Add(Task.Run(() => novnc.RunAsync(stop.Token)));
+                }
+                catch (IOException ex)
+                {
+                    Log.Warn(ex.Message + " noVNC 不開，WinSCP 與 UltraVNC 照常。");
+                    novnc = null;
+                }
                 string mode = fileTunnel ? "經 File-Tunnel 跳板" : proxy != null ? $"經 SOCKS5 代理 {proxy.Host}:{proxy.Port}" : "直連";
-                Log.Info($"已就緒（{mode}）：UltraVNC Repeater 127.0.0.1:{repeater.Port}，WinSCP 橋接 127.0.0.1:{ftp.Port}。");
+                Log.Info($"已就緒（{mode}）：UltraVNC Repeater 127.0.0.1:{repeater.Port}，WinSCP 橋接 127.0.0.1:{ftp.Port}" +
+                    (novnc != null ? $"，noVNC http://127.0.0.1:{novnc.Port}/。" : "。"));
 
                 Console.WriteLine();
-                Console.WriteLine($"已就緒（{mode}），WinSCP 與 UltraVNC 可同時使用。");
+                Console.WriteLine($"已就緒（{mode}），WinSCP、UltraVNC{(novnc != null ? " 與 noVNC" : "")} 可同時使用。");
                 if (fileTunnel) Console.WriteLine("  1. 用 mstsc 連跳板，在跳板執行 Start-FileTunnel-Remote.cmd（已在執行就不用再開）。");
                 Console.WriteLine("  2. WinSCP：填機台 IP、VNC 埠與密碼後登入。UltraVNC：在 Viewer 填機台 IP，按 Connect。");
                 if (viewer != null && !ownViewer) Console.WriteLine("     " + ManualRepeaterHint);
+                if (novnc != null) Console.WriteLine("  3. mRemoteNG：新增 HTTP/HTTPS 連線，網址填 " + NoVncBridge.UrlHint(novnc.Port));
                 Console.WriteLine("此視窗開著就一直可用；關閉 WinSCP 或 Viewer 不影響，可從工作列再開。");
                 Console.WriteLine("按 W 再開 WinSCP，按 V（或 Enter）再開 Viewer；按 Q 或關閉此視窗即結束。");
                 Console.WriteLine();
