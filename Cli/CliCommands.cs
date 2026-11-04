@@ -413,10 +413,17 @@ public static class CliCommands
           直連時若設了 UVNC_SOCKS5_PROXY 則經該 SOCKS5 代理；--file-tunnel 經 RDP 跳板。
           noVNC 檔案在 exe 旁的 noVNC\（Build-Portable.ps1 下載）；mRemoteNG 的瀏覽器需為 WebView2。
 
+        【自編版 mRemoteNG 主機模式（由 mRemoteNG 自動啟動）】
+          UvncFtpBridge --mremoteng
+          跟 --open 一樣開 FTP 橋接、Repeater（5999）與 noVNC（6080），但不開 WinSCP／Viewer，並同時支援直連
+          與多個跳板：目標寫成「跳板~機台」就走那個跳板自己的 File-Tunnel（本機 1082 起的埠）。
+          WinSCP 帳號 ultravnc~跳板、noVNC ws/跳板~機台、Repeater 跳板~機台:埠。已在執行時直接結束。
+
         【跳板端（RDP 跳板上執行）】
-          UvncFtpBridge --remote [磁碟代號 | 完整重新導向路徑]
+          UvncFtpBridge --remote [磁碟代號 | 完整重新導向路徑] [--route 跳板名稱]
           從 \\tsclient\C 找本機啟動檔的共用資料夾，用旁邊的 ft.exe 接上；本機重開時自動重接。
           本機系統磁碟不是 C 時給磁碟代號，例如 --remote D。
+          mRemoteNG 主機模式的多跳板通道會依本機電腦名稱／IP 自動對應；名稱對不上時用 --route 指定。
 
         【其他】
           UvncFtpBridge --selftest   內建自我測試

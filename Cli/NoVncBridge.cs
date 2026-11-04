@@ -12,8 +12,16 @@ namespace UvncFtpBridge.Cli;
 /// http://127.0.0.1:6080/vnc.html?path=ws/&lt;機台IP&gt; 就能嵌進分頁、直達那台。
 /// 不走 Repeater 的握手——目標由橋這端直接連。--open 會一起開（見 TunnelHost），也可以用 --novnc 單獨開。
 /// </summary>
-internal sealed class NoVncBridge(string baseDir, int port, Socks5Proxy? proxy)
+internal sealed class NoVncBridge(string baseDir, int port, Socks5Proxy? proxy, RouteProxy? routes = null,
+    Func<string, System.Collections.Specialized.NameValueCollection, string?>? api = null)
 {
+    /// <summary>
+    /// mRemoteNG 主機模式的控制 API（/api/...，回 JSON）。要帶 X-UvncFtpBridge 標頭，
+    /// 讓瀏覽器裡的網頁無法直接叫用（自訂標頭會觸發 CORS 預檢，而我們不回應預檢）。
+    /// </summary>
+    const string ApiPrefix = "/api/";
+    public const string ApiHeader = "X-UvncFtpBridge";
+
     public const int DefaultPort = 6080;
     const int DefaultVncPort = 5900;
     const int BufferSize = 64 * 1024;
@@ -141,6 +149,11 @@ internal sealed class NoVncBridge(string baseDir, int port, Socks5Proxy? proxy)
                 await HandleWebSocketAsync(ctx, Uri.UnescapeDataString(path[WebSocketPrefix.Length..]), ct);
                 return;
             }
+            if (api != null && path.StartsWith(ApiPrefix, StringComparison.Ordinal))
+            {
+                await HandleApiAsync(ctx, path[ApiPrefix.Length..], ct);
+                return;
+            }
             if (path == "/")
             {
                 // 沒指定頁面就開原版 vnc.html，網址參數原樣帶過去
@@ -169,6 +182,36 @@ internal sealed class NoVncBridge(string baseDir, int port, Socks5Proxy? proxy)
         }
     }
 
+    async Task HandleApiAsync(HttpListenerContext ctx, string name, CancellationToken ct)
+    {
+        string? json = null;
+        int status = 404;
+        if (ctx.Request.Headers[ApiHeader] == null) status = 403;
+        else
+        {
+            try
+            {
+                json = await Task.Run(() => api!(name, ctx.Request.QueryString), ct);
+                if (json != null) status = 200;
+            }
+            catch (Exception ex)
+            {
+                status = 500;
+                json = "{\"error\":" + System.Text.Json.JsonSerializer.Serialize(ex.Message) + "}";
+            }
+        }
+        ctx.Response.StatusCode = status;
+        ctx.Response.Headers["Cache-Control"] = "no-store";
+        if (json != null)
+        {
+            byte[] body = System.Text.Encoding.UTF8.GetBytes(json);
+            ctx.Response.ContentType = "application/json; charset=utf-8";
+            ctx.Response.ContentLength64 = body.Length;
+            await ctx.Response.OutputStream.WriteAsync(body, ct);
+        }
+        ctx.Response.Close();
+    }
+
     async Task HandleWebSocketAsync(HttpListenerContext ctx, string target, CancellationToken ct)
     {
         if (!ctx.Request.IsWebSocketRequest)
@@ -176,6 +219,19 @@ internal sealed class NoVncBridge(string baseDir, int port, Socks5Proxy? proxy)
             ctx.Response.StatusCode = 400;
             ctx.Response.Close();
             return;
+        }
+        // 多跳板路由（mRemoteNG 主機模式）：ws/路由~機台[:埠]
+        string? route = null;
+        if (routes != null)
+        {
+            if (!Route.TrySplit(target, out route, out string rest))
+            {
+                Log.Warn($"noVNC：路由名稱不合法「{target}」。");
+                ctx.Response.StatusCode = 400;
+                ctx.Response.Close();
+                return;
+            }
+            target = rest;
         }
         var destination = ParseTarget(target);
         if (destination == null)
@@ -194,12 +250,21 @@ internal sealed class NoVncBridge(string baseDir, int port, Socks5Proxy? proxy)
         var tcp = new TcpClient { NoDelay = true };
         try
         {
-            Log.Info($"noVNC 連線 → {host}:{targetPort}");
-            await Task.Run(() =>
+            if (route == null)
             {
-                if (proxy == null) RfbConnection.ConnectTcp(tcp, host, targetPort, 15000, $"連不上 {host}:{targetPort}");
-                else proxy.Connect(tcp, host, targetPort, 15000);
-            }, ct);
+                Log.Info($"noVNC 連線 → {host}:{targetPort}");
+                await Task.Run(() =>
+                {
+                    if (proxy == null) RfbConnection.ConnectTcp(tcp, host, targetPort, 15000, $"連不上 {host}:{targetPort}");
+                    else proxy.Connect(tcp, host, targetPort, 15000);
+                }, ct);
+            }
+            else
+            {
+                Log.Info($"noVNC 連線 → {host}:{targetPort}（經跳板 {route}）");
+                tcp.Dispose();
+                tcp = await Task.Run(() => Route.ConnectWithWait(routes!(route), host, targetPort, TimeSpan.FromSeconds(30)), ct);
+            }
         }
         catch (Exception ex)
         {

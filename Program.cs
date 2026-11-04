@@ -28,6 +28,7 @@ static class Program
         if (args[0] is "winscp") return WinScpCommand.Run(args.Skip(1).ToArray());
         if (args[0] is "--open" or "--vnc" or "vnc") return TunnelHost.RunCli(args.Skip(1).ToArray());
         if (args[0] is "--novnc") return NoVncBridge.RunCli(args.Skip(1).ToArray());
+        if (args[0] is "--mremoteng") return MRemoteNgHost.Run(args.Skip(1).ToArray());
         if (args.Contains("--ftp")) return RunFtp(args);
 
         return CliCommands.Run(args);
@@ -166,10 +167,18 @@ static class Program
         Check(Cli.NoVncBridge.ParseTarget("") == null && Cli.NoVncBridge.ParseTarget("a b") == null && Cli.NoVncBridge.ParseTarget("10.1.2.3:x") == null,
             "noVNC 拒絕空白或無效位址");
 
+        // 多跳板路由：「路由~目標」
+        Check(Route.TrySplit("10.6.0.11~10.1.2.3:5900", out var r1, out var rest1) && r1 == "10.6.0.11" && rest1 == "10.1.2.3:5900", "路由拆解 10.6.0.11~10.1.2.3:5900");
+        Check(Route.TrySplit("10.1.2.3", out var r2, out var rest2) && r2 == null && rest2 == "10.1.2.3", "沒有路由時原樣");
+        Check(!Route.TrySplit("a b~10.1.2.3", out _, out _) && !Route.TrySplit("~10.1.2.3", out _, out _), "拒絕不合法的路由名稱");
+        Check(Route.Sanitize("fe80::1%3") == "fe80__1_3" && Route.Sanitize(" jump-01.corp ") == "jump-01.corp", "主機名稱轉路由名稱");
+
         string? relay = RepeaterExchange(ipv4Request, 0);
         Check(relay == null, "Repeater 經 SOCKS5 雙向轉送" + (relay == null ? "" : "：" + relay));
         relay = RepeaterExchange(ipv4Request, 1500);
         Check(relay == null, "Repeater 等代理晚 1.5 秒才開（跳板端還沒連上）" + (relay == null ? "" : "：" + relay));
+        relay = RepeaterExchange(ipv4Request, 0, route: "jumpA");
+        Check(relay == null, "Repeater 依「路由~機台」改走那條路由的代理" + (relay == null ? "" : "：" + relay));
 
         Console.WriteLine(fail == 0 ? "\n全部通過。" : $"\n有 {fail} 項失敗。");
         return fail == 0 ? 0 : 1;
@@ -189,7 +198,7 @@ static class Program
     }
 
     /// <summary>假 Viewer → Repeater → 假 SOCKS5：檢查交握、CONNECT 位元組與兩個方向的資料。</summary>
-    static string? RepeaterExchange(byte[] expectedRequest, int proxyDelayMs)
+    static string? RepeaterExchange(byte[] expectedRequest, int proxyDelayMs, string? route = null)
     {
         var socks = new System.Net.Sockets.TcpListener(IPAddress.Loopback, UnusedPort());
         if (proxyDelayMs == 0) socks.Start();
@@ -215,7 +224,12 @@ static class Program
             s.WriteByte((byte)(b + 1));
         });
         using var stop = new CancellationTokenSource();
-        var repeater = new VncRepeater(IPAddress.Loopback, 0, new Socks5Proxy("127.0.0.1", ((IPEndPoint)socks.LocalEndpoint).Port));
+        var fake = new Socks5Proxy("127.0.0.1", ((IPEndPoint)socks.LocalEndpoint).Port);
+        string? askedRoute = null;
+        // 有路由時：預設代理指向沒開的埠（走錯就會失敗），路由才指向假代理
+        var repeater = route == null
+            ? new VncRepeater(IPAddress.Loopback, 0, fake)
+            : new VncRepeater(IPAddress.Loopback, 0, new Socks5Proxy("127.0.0.1", UnusedPort()), id => { askedRoute = id; return fake; }) { ProxyWait = TimeSpan.Zero };
         repeater.Start();
         Task serve = repeater.RunAsync(stop.Token);
         try
@@ -227,13 +241,14 @@ static class Program
             byte[] hello = new byte[12];
             vs.ReadExactly(hello);
             if (Encoding.ASCII.GetString(hello) != "RFB 000.000\n") return "Repeater 版本字串不對";
-            vs.Write(HostBlock("10.1.2.3:5900"));
+            vs.Write(HostBlock(route == null ? "10.1.2.3:5900" : route + "~10.1.2.3:5900"));
             byte[] data = new byte[3];
             vs.ReadExactly(data);
             if (Encoding.ASCII.GetString(data) != "RFB") return "機台→Viewer 方向沒轉送";
             vs.WriteByte(41);
             if (vs.ReadByte() != 42) return "Viewer→機台方向沒轉送";
             fakeProxy.Wait(3000 + proxyDelayMs);
+            if (route != null && askedRoute != route) return $"路由不對（{askedRoute ?? "沒問路由"}）";
             return requestOk ? null : "CONNECT 位元組不符";
         }
         catch (IOException ex) { return ex.Message; }

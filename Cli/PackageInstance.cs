@@ -40,6 +40,18 @@ internal sealed class PackageInstance : IDisposable
         return true;
     }
 
+    /// <summary>mRemoteNG 主機模式（--mremoteng）活著的期間另外持有這個旗標，讓重複啟動直接結束。</summary>
+    public static Mutex MarkMRemoteNgHost(string baseDir) => new(false, MRemoteNgHostName(baseDir));
+
+    public static bool MRemoteNgHostRunning(string baseDir)
+    {
+        if (!Mutex.TryOpenExisting(MRemoteNgHostName(baseDir), out var handle)) return false;
+        handle.Dispose();
+        return true;
+    }
+
+    static string MRemoteNgHostName(string baseDir) => @"Local\UvncFtpBridge.MRemoteNgHost." + PackageId(baseDir);
+
     /// <summary>通道主機把 FTP 橋接的埠號寫在這裡，給之後開的 WinSCP 入口設定 INI。</summary>
     public static string FtpPortFile(string baseDir) => Path.Combine(baseDir, "Logs", "tunnel-host.port");
 

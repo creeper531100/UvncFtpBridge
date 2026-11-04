@@ -116,12 +116,28 @@ public sealed class FtpSession(TcpClient control, FtpServer server)
             vncPort = p;
         }
 
+        // 多跳板路由：USER 的帳號部分寫成 ultravnc~路由（只有 mRemoteNG 主機模式支援）
+        string account = _user[..Math.Max(0, _user.LastIndexOf('@'))];
+        string? route = null;
+        int tilde = account.IndexOf(Route.Separator);
+        if (_server.Routes != null && tilde >= 0)
+        {
+            route = account[(tilde + 1)..];
+            if (!Route.IsValidId(route))
+            {
+                Send(530, $"路由名稱不合法：{route}");
+                return;
+            }
+        }
+
         try
         {
             _authed = false;
             _vnc?.Dispose(); _vnc = null; _ft = null;
-            Log.Info($"連線到機台 {host}:{vncPort} …");
-            _vnc = RfbConnection.Connect(host, vncPort, password, proxy: _server.Proxy);
+            Log.Info(route == null ? $"連線到機台 {host}:{vncPort} …" : $"連線到機台 {host}:{vncPort}（經跳板 {route}）…");
+            _vnc = route == null
+                ? RfbConnection.Connect(host, vncPort, password, proxy: _server.Proxy)
+                : ConnectThroughRoute(() => _server.Routes!(route), host, vncPort, password);
             _ft = new UvncFileTransfer(_vnc);
             _ft.RequestAccess();
             _authed = true;
@@ -134,6 +150,26 @@ public sealed class FtpSession(TcpClient control, FtpServer server)
             Log.Warn($"機台 {host} 登入失敗：{ex.Message}");
             _vnc?.Dispose(); _vnc = null; _ft = null;
             Send(530, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 經跳板路由連機台：File-Tunnel 要等跳板端連上才收連線，代理連不上時重試約 12 秒
+    /// （WinSCP 預設 15 秒逾時，所以不能等更久）。
+    /// </summary>
+    static RfbConnection ConnectThroughRoute(Func<Socks5Proxy> proxyFactory, string host, int vncPort, string password)
+    {
+        Socks5Proxy proxy;
+        try { proxy = proxyFactory(); }
+        catch (Exception ex) when (ex is not VncException) { throw new VncException("無法開啟跳板通道：" + ex.Message); }
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(12);
+        while (true)
+        {
+            try { return RfbConnection.Connect(host, vncPort, password, proxy: proxy); }
+            catch (VncException ex) when (ex.Message.StartsWith(Socks5Proxy.UnreachableMessage, StringComparison.Ordinal) && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(1000);
+            }
         }
     }
 

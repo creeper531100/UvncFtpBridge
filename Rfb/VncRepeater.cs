@@ -9,7 +9,7 @@ namespace UvncFtpBridge.Rfb;
 /// UltraVNC Repeater Mode I：Viewer 勾「Use Repeater」後先連到這裡，告訴我們要連哪台機台，
 /// 我們再經 SOCKS5 代理接過去，之後雙向原樣轉送。協定同 UltraVNC repeater/mode12_listener.cpp。
 /// </summary>
-public sealed class VncRepeater(IPAddress bindAddress, int port, Socks5Proxy? proxy)
+public sealed class VncRepeater(IPAddress bindAddress, int port, Socks5Proxy? proxy, RouteProxy? routes = null)
 {
     public const int DefaultPort = 5999;
     const int HostBlockLength = 250; // UltraVNC 的 MAX_HOST_NAME_LEN
@@ -70,16 +70,36 @@ public sealed class VncRepeater(IPAddress bindAddress, int port, Socks5Proxy? pr
                 timeout.CancelAfter(10000);
                 await viewerStream.ReadExactlyAsync(block, timeout.Token);
             }
-            var destination = ParseTarget(block);
+            // 多跳板路由（mRemoteNG 主機模式）：Viewer 的目標寫成「路由~機台:埠」
+            string? route = null;
+            byte[] hostBlock = block;
+            if (routes != null)
+            {
+                int end = Array.IndexOf(block, (byte)0);
+                string text = Encoding.UTF8.GetString(block, 0, end < 0 ? block.Length : end).Trim();
+                if (!Route.TrySplit(text, out route, out string rest))
+                {
+                    Log.Warn($"VNC Repeater 收到不合法的路由「{Describe(block)}」。");
+                    return;
+                }
+                if (route != null) hostBlock = Encoding.UTF8.GetBytes(rest);
+            }
+            var destination = ParseTarget(hostBlock);
             if (destination == null)
             {
                 Log.Warn($"VNC Repeater 收到無法辨識的機台位址「{Describe(block)}」。請在 Viewer 填機台 IP，例如 10.1.2.3 或 10.1.2.3::5901。");
                 return;
             }
             var (host, targetPort) = destination.Value;
-            where = $"{host}:{targetPort}";
+            where = route == null ? $"{host}:{targetPort}" : $"{host}:{targetPort}（經跳板 {route}）";
             Log.Info($"VNC 連線 → {where}");
-            target = await ConnectThroughProxy(host, targetPort, open, ct);
+            Socks5Proxy? via = proxy;
+            if (route != null)
+            {
+                try { via = await Task.Run(() => routes!(route), ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { throw new VncException("無法開啟跳板通道：" + ex.Message); }
+            }
+            target = await ConnectThroughProxy(via, host, targetPort, open, ct);
 
             var targetStream = target.GetStream();
             Task up = Pump(viewerStream, targetStream, ct);
@@ -113,7 +133,7 @@ public sealed class VncRepeater(IPAddress bindAddress, int port, Socks5Proxy? pr
     /// File-Tunnel 要等跳板端連上才開始收 SOCKS5 連線（log 會出現 Started SOCKS proxy），通常要十幾秒。
     /// 這段期間代理會拒絕連線，所以先等它就緒，Viewer 那邊就不用重按 Connect。
     /// </summary>
-    async Task<TcpClient> ConnectThroughProxy(string host, int targetPort, ConcurrentDictionary<TcpClient, byte> open, CancellationToken ct)
+    async Task<TcpClient> ConnectThroughProxy(Socks5Proxy? proxy, string host, int targetPort, ConcurrentDictionary<TcpClient, byte> open, CancellationToken ct)
     {
         if (proxy == null) // 直連模式：Viewer 填的機台本機就連得到
         {

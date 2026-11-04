@@ -5,12 +5,15 @@ using UvncFtpBridge.Rfb;
 namespace UvncFtpBridge.Ftp;
 
 /// <summary>最精簡的 FTP 伺服器，只監聽在 127.0.0.1。每條連線各開一條執行緒。</summary>
-public sealed class FtpServer(IPAddress bindAddress, int port, int defaultVncPort, string? targetHost = null, Socks5Proxy? proxy = null)
+public sealed class FtpServer(IPAddress bindAddress, int port, int defaultVncPort, string? targetHost = null, Socks5Proxy? proxy = null,
+    RouteProxy? routes = null)
 {
     readonly TcpListener _listener = new(bindAddress, port);
     public int DefaultVncPort { get; } = defaultVncPort;
     public string? TargetHost { get; } = targetHost;
     public Socks5Proxy? Proxy { get; } = proxy;
+    /// <summary>多跳板路由（mRemoteNG 主機模式）：USER ultravnc~路由@機台 走那條路由。null = 不支援，跟原本一樣。</summary>
+    public RouteProxy? Routes { get; } = routes;
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
     bool _started;

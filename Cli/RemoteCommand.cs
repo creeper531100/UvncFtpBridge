@@ -11,9 +11,10 @@ namespace UvncFtpBridge.Cli;
 /// </summary>
 public static class RemoteCommand
 {
-    const string Usage = "Usage: UvncFtpBridge --remote [drive letter | full redirected TEMP path]\n" +
+    const string Usage = "Usage: UvncFtpBridge --remote [drive letter | full redirected TEMP path] [--route <jump host name>]\n" +
                          "  e.g. UvncFtpBridge --remote D\n" +
-                         "       UvncFtpBridge --remote \"\\\\tsclient\\C\\MyTemp\\UvncFtpBridge\\FileTunnel\"";
+                         "       UvncFtpBridge --remote \"\\\\tsclient\\C\\MyTemp\\UvncFtpBridge\\FileTunnel\"\n" +
+                         "       UvncFtpBridge --remote --route 10.6.0.11   (mRemoteNG multi jump host tunnels)";
 
     enum MarkerState { Read, Gone, Unknown }
 
@@ -25,12 +26,20 @@ public static class RemoteCommand
             Console.Error.WriteLine("File-Tunnel remote error: place ft.exe beside UvncFtpBridge.exe.");
             return 1;
         }
-        if (args.Length > 1)
+        // --route <name>：mRemoteNG 主機模式的多跳板通道，指定這台跳板對應的路由（預設依本機名稱／IP 自動比對）
+        string? routeArg = null;
+        var positional = new List<string>();
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--route" && routeArg == null && i + 1 < args.Length) routeArg = args[++i];
+            else positional.Add(args[i]);
+        }
+        if (positional.Count > 1 || (routeArg != null && !Rfb.Route.IsValidId(routeArg)))
         {
             Console.Error.WriteLine(Usage);
             return 2;
         }
-        string target = args.Length == 1 ? args[0] : "C";
+        string target = positional.Count == 1 ? positional[0] : "C";
         bool explicitPath = Path.IsPathRooted(target) && target.Length > 2;
         string? profiles = null;
         if (!explicitPath)
@@ -68,7 +77,7 @@ public static class RemoteCommand
         // Each pass serves one local launcher session; when it ends, go back to waiting for the next one.
         while (true)
         {
-            string shared = WaitForLocalTunnel(explicitPath ? target : null, profiles);
+            string shared = WaitForLocalTunnel(explicitPath ? target : null, profiles, routeArg);
             string marker = Path.Combine(shared, "active.marker");
             string? session = null;
             for (int attempt = 0; session == null && attempt < 10; attempt++)
@@ -119,9 +128,12 @@ public static class RemoteCommand
         }
     }
 
-    static string WaitForLocalTunnel(string? explicitPath, string? profiles)
+    static string WaitForLocalTunnel(string? explicitPath, string? profiles, string? routeArg)
     {
         string lastStatus = "";
+        var identities = routeArg == null ? OwnIdentities() : new HashSet<string>(StringComparer.OrdinalIgnoreCase) { routeArg };
+        if (routeArg == null && explicitPath == null)
+            Console.WriteLine("mRemoteNG jump host tunnels for this machine: " + string.Join(", ", identities.Order()));
         while (true)
         {
             string status;
@@ -137,20 +149,44 @@ public static class RemoteCommand
             else
             {
                 var found = new List<string>();
+                var otherRoutes = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
                 try
                 {
                     foreach (string user in Directory.EnumerateDirectories(profiles!))
                     {
-                        string candidate = Path.Combine(user, @"AppData\Local\Temp\UvncFtpBridge\FileTunnel");
-                        try { if (File.Exists(Path.Combine(candidate, "active.marker"))) found.Add(candidate); }
+                        string bridgeTemp = Path.Combine(user, @"AppData\Local\Temp\UvncFtpBridge");
+                        // The single File-Tunnel of Start-FileTunnel.cmd (unchanged); skipped when --route picks one.
+                        if (routeArg == null)
+                        {
+                            string candidate = Path.Combine(bridgeTemp, "FileTunnel");
+                            try { if (File.Exists(Path.Combine(candidate, "active.marker"))) found.Add(candidate); }
+                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                        }
+                        // mRemoteNG host mode: one folder per jump host, named after the jump host's name or IP.
+                        string routesDir = Path.Combine(bridgeTemp, FileTunnelSession.RoutesFolderName);
+                        try
+                        {
+                            if (!Directory.Exists(routesDir)) continue;
+                            foreach (string routeDir in Directory.EnumerateDirectories(routesDir))
+                            {
+                                if (!File.Exists(Path.Combine(routeDir, "active.marker"))) continue;
+                                string name = Path.GetFileName(routeDir);
+                                if (identities.Contains(name)) found.Add(routeDir);
+                                else otherRoutes.Add(name);
+                            }
+                        }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                     }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                 if (found.Count == 1) return found[0];
-                status = found.Count > 1
-                    ? $"Multiple active local TEMP tunnels found under {profiles}. Close the extra ones, or restart with the complete redirected TEMP path."
-                    : $"Waiting for local tunnel under {profiles}. Start the File-Tunnel launcher on the local PC.";
+                if (found.Count > 1)
+                    status = $"Multiple active local TEMP tunnels found under {profiles}. Close the extra ones, or restart with the complete redirected TEMP path or --route.";
+                else if (otherRoutes.Count > 0)
+                    status = $"Waiting for this jump host's tunnel under {profiles}. Found tunnels for other jump hosts: {string.Join(", ", otherRoutes)}.\n" +
+                             "If one of them is this machine (e.g. mRemoteNG connects to it by another name or a NAT address), restart with --route <name>.";
+                else
+                    status = $"Waiting for local tunnel under {profiles}. Start the File-Tunnel launcher on the local PC.";
             }
             if (status != lastStatus)
             {
@@ -159,6 +195,43 @@ public static class RemoteCommand
             }
             Thread.Sleep(2000);
         }
+    }
+
+    /// <summary>
+    /// Route names this jump host answers to: its computer name, DNS host name / FQDN and every local IP,
+    /// so the folder mRemoteNG names after the jump connection's host (name or IP) is found automatically.
+    /// </summary>
+    static HashSet<string> OwnIdentities()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            string id = Rfb.Route.Sanitize(value);
+            if (Rfb.Route.IsValidId(id)) names.Add(id);
+        }
+        Add(Environment.MachineName);
+        try
+        {
+            string host = System.Net.Dns.GetHostName();
+            Add(host);
+            Add(System.Net.Dns.GetHostEntry(host).HostName);
+        }
+        catch (System.Net.Sockets.SocketException) { }
+        try
+        {
+            foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                foreach (var address in nic.GetIPProperties().UnicastAddresses)
+                {
+                    if (System.Net.IPAddress.IsLoopback(address.Address)) continue;
+                    Add(address.Address.ToString());
+                }
+            }
+        }
+        catch (System.Net.NetworkInformation.NetworkInformationException) { }
+        return names;
     }
 
     /// <summary>Reads without locking: the local launcher rewrites and deletes this file while we poll it.</summary>

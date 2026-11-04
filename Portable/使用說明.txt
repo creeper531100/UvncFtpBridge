@@ -21,6 +21,18 @@ mRemoteNG（畫面嵌在分頁裡）：
   不要加 reconnect=true：密碼錯時會一直重試，機台的 UltraVNC 會暫時封鎖跳板（或本機）的 IP，連 Viewer 也一起連不上。
   直連或經跳板都一樣，看你開的是哪個啟動檔。mRemoteNG 的網頁核心須為 WebView2（Edge），舊的 IE 核心不支援。
 
+自編版 mRemoteNG（noVNC／UltraVNC／WinSCP 協定、「檔案傳輸」按鈕、「跳板通道」）：
+  不用開啟動檔，mRemoteNG 會在需要時自動在背景開本套件（UvncFtpBridge.exe --mremoteng，最小化的命令視窗）。
+  1. 把本套件資料夾放在 mRemoteNG 旁邊（或到 mRemoteNG「工具 → 選項 → 進階」指定 UvncFtpBridge 位置）。
+  2. 每台機台新增連線：協定選 noVNC（網頁畫面）或 UltraVNC（嵌入 Viewer），主機填機台 IP，埠 5900，密碼填 VNC 密碼。
+  3. 要經跳板時：先建一個連到跳板的連線（例如 RDP，主機填跳板的 IP 或名稱），機台連線的「雜項 → 跳板通道」選它
+     （可以在資料夾設定，底下的機台用繼承）。開機台時跳板沒開會一起開；跳板裡照下面的方式執行 Start-FileTunnel-Remote.cmd。
+  4. 看畫面的分頁在前景時，按工具列的「檔案傳輸」，會開一個嵌入的 WinSCP 分頁連到同一台（同一跳板）。
+  可以同時用多個跳板：每個跳板各自一條 File-Tunnel（本機 1082 起的埠、資料夾 %TEMP%\UvncFtpBridge\Routes\跳板名稱）。
+  跳板端要用這一版的 UvncFtpBridge.exe：它會依自己的電腦名稱／IP 找到對應的通道；mRemoteNG 用別的名稱（例如 NAT 位址）連跳板時，
+  在跳板執行 Start-FileTunnel-Remote.cmd --route 跳板名稱（名稱就是 mRemoteNG 跳板連線的主機欄位）。
+  已經用 Start-Direct／Start-FileTunnel 開著時 mRemoteNG 無法再開自己的通道，請先關閉那個命令視窗。
+
 經 RDP 跳板（Start-FileTunnel.cmd）另外要做：
 1. 用 mstsc 連這次要用的跳板。連線前在「顯示選項 → 本機資源 → 詳細資料」勾選本機 C 槽；如果已有 RDP 工作階段，請斷線後重連才會生效。啟動檔不會替你開 RDP。
 2. 把 UvncFtpBridge.exe、ft.exe 與 Start-FileTunnel-Remote.cmd 複製到跳板的同一資料夾，雙擊 Start-FileTunnel-Remote.cmd，保持黑色視窗開著。跳板端不需要 PowerShell 或 .NET，Windows 7 也可用。若本機系統磁碟不是 C，從命令列給它磁碟代號，例如 Start-FileTunnel-Remote.cmd D；若 TEMP 位置被自訂，給完整的重新導向路徑。
