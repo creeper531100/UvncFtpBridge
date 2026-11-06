@@ -175,11 +175,26 @@ public sealed class RfbConnection : IDisposable
 
         WriteRaw(new byte[] { chosen });
 
-        if (chosen == 2) VncPasswordResponse(password);
-        // chosen == 1：不需驗證，不用做事
+        string stage = "等待驗證挑戰";
+        try
+        {
+            if (chosen == 2)
+            {
+                VncPasswordResponse(password);
+                stage = "送出密碼後等待驗證結果";
+            }
+            // chosen == 1：不需驗證，不用做事
 
-        // SecurityResult（3.8 一定有；3.7 在成功時不送，所以只在有資料時讀）
-        ReadSecurityResult(require: replyMinorWas8);
+            // SecurityResult（3.8 一定有；3.7 在成功時不送，所以只在有資料時讀）
+            ReadSecurityResult(require: replyMinorWas8);
+        }
+        catch (EndOfStreamException)
+        {
+            // UltraVNC 在密碼錯太多次後，會有一段時間連正確密碼也直接斷線（不回驗證結果），
+            // 更多次就在連線一開始回「Your connection has been rejected to many attempts」
+            Log.Debug($"[{Host}] 驗證時被斷線（{stage}）");
+            throw new VncException($"機台在驗證時直接斷線（{stage}）。通常是密碼錯太多次，被 UltraVNC 暫時封鎖，請等幾分鐘再試；也請確認 VNC 密碼正確。");
+        }
     }
 
     bool replyMinorWas8;

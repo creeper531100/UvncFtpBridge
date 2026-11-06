@@ -1,6 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$FrameworkDependent,
+    # dist 裡的 noVNC 有手動改過的檔案時預設停下來不覆蓋；確定要丟掉那些修改才加這個。
+    [switch]$OverwriteNoVnc,
     # The uvnc.com download sits behind a form, so bundle the signed viewer from an existing UltraVNC install.
     [string]$VncViewerPath = (Join-Path $env:ProgramFiles 'uvnc bvba\UltraVNC\vncviewer.exe')
 )
@@ -65,8 +67,9 @@ $cliFiles = @(if ($FrameworkDependent) {
     Get-Item -LiteralPath (Join-Path $rootPath 'dist\UvncFtpBridge.exe')
 })
 foreach ($cliFile in $cliFiles) { Copy-Item -LiteralPath $cliFile.FullName -Destination $packagePath }
-# noVNC (served by --open for mRemoteNG tabs): official release, unmodified, beside the exe in noVNC\.
-# Only defaults.json (noVNC's site-settings file) is ours: autoconnect + scale to the tab.
+# noVNC (served by --open for mRemoteNG tabs): official release beside the exe in noVNC.
+# Ours: defaults.json (autoconnect + scale to the tab), the UltraVNC cursor patch to core/rfb.js and the
+# Windows clipboard sync patch to app/ui.js below.
 $noVncVersion = '1.7.0'
 $noVncHash = 'D55E9CCE9A611294DF33C7200F32F35108652DE2D86A468BEBCFC6F2A1C9A196'
 $noVncZip = Join-Path $cachePath "noVNC-$noVncVersion.zip"
@@ -81,13 +84,120 @@ Remove-Item -LiteralPath $noVncExtract -Recurse -Force -ErrorAction SilentlyCont
 Expand-Archive -LiteralPath $noVncZip -DestinationPath $noVncExtract -Force
 $noVncSource = Join-Path $noVncExtract "noVNC-$noVncVersion"
 $noVncPath = Join-Path $packagePath 'noVNC'
-Remove-Item -LiteralPath $noVncPath -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $noVncPath -Force | Out-Null
+# 先在暫存區組好，確認不會蓋掉 dist 裡手動改過的檔案，才換上去。
+$noVncStage = Join-Path $cachePath 'noVNC-stage'
+Remove-Item -LiteralPath $noVncStage -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $noVncStage -Force | Out-Null
 # package.json is fetched by vnc.html to show the noVNC version.
 foreach ($item in @('vnc.html','app','core','vendor','mandatory.json','package.json','LICENSE.txt','AUTHORS')) {
-    Copy-Item -LiteralPath (Join-Path $noVncSource $item) -Destination $noVncPath -Recurse -Force
+    Copy-Item -LiteralPath (Join-Path $noVncSource $item) -Destination $noVncStage -Recurse -Force
 }
-Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\noVNC-defaults.json') -Destination (Join-Path $noVncPath 'defaults.json') -Force
+Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\noVNC-defaults.json') -Destination (Join-Path $noVncStage 'defaults.json') -Force
+# UltraVNC server only sends cursor shapes (-239) when the client also asks for PointerPos (-232)
+# (vncclient.cpp SetEncodings: no m_use_PointerPos -> EnableRichCursor(FALSE)), otherwise the cursor is
+# drawn into the remote framebuffer and lags. Patch noVNC to request -232 and skip its header-only rects.
+$rfbJsPath = Join-Path $noVncStage 'core\rfb.js'
+$rfbJs = [IO.File]::ReadAllText($rfbJsPath)
+$encAnchor = 'encs.push(encodings.pseudoEncodingCursor);'
+$rectAnchor = 'case encodings.pseudoEncodingVMwareCursor:'
+if (-not $rfbJs.Contains($encAnchor) -or -not $rfbJs.Contains($rectAnchor)) {
+    throw 'noVNC rfb.js changed: UltraVNC PointerPos patch anchors not found.'
+}
+$rfbJs = $rfbJs.Replace($encAnchor, "$encAnchor encs.push(-232); /* UltraVNC PointerPos */")
+$rfbJs = $rfbJs.Replace($rectAnchor, "case -232: return true; /* UltraVNC PointerPos */`n            $rectAnchor")
+[IO.File]::WriteAllText($rfbJsPath, $rfbJs, (New-Object Text.UTF8Encoding $false))
+# noVNC only puts the server clipboard into its side panel and never touches the system clipboard.
+# Sync it with the Windows clipboard (mRemoteNG's WebView2 tab auto-allows the clipboard-read permission):
+#   server -> PC: navigator.clipboard.writeText when the server clipboard arrives (kept until focus if the page is not focused);
+#   PC -> server: navigator.clipboard.readText when the page gets focus or connects, sent only when it changed.
+$uiJsPath = Join-Path $noVncStage 'app\ui.js'
+$uiJs = [IO.File]::ReadAllText($uiJsPath)
+$clipAnchors = @{
+    Receive  = "document.getElementById('noVNC_clipboard_text').value = e.detail.text;"
+    Methods  = '    clipboardSend() {'
+    Handlers = ".addEventListener('change', UI.clipboardSend);"
+    Connect  = 'UI.connected = true;'
+}
+foreach ($anchor in $clipAnchors.Values) {
+    if (([regex]::Matches($uiJs, [regex]::Escape($anchor))).Count -ne 1) {
+        throw "noVNC ui.js changed: clipboard sync patch anchor not found exactly once: $anchor"
+    }
+}
+$clipMethods = @'
+    // mRemoteNG clipboard sync (see Build-Portable.ps1)
+    sysClipLast: null,
+    sysClipPending: null,
+
+    sysClipWrite(text) {
+        UI.sysClipLast = text;
+        if (!navigator.clipboard || !navigator.clipboard.writeText) return;
+        navigator.clipboard.writeText(text).catch(() => { UI.sysClipPending = text; });
+    },
+
+    sysClipRead() {
+        if (!navigator.clipboard) return;
+        if (UI.sysClipPending !== null) {
+            const pending = UI.sysClipPending;
+            UI.sysClipPending = null;
+            UI.sysClipWrite(pending);
+            return;
+        }
+        if (!UI.rfb || !UI.connected || !navigator.clipboard.readText) return;
+        navigator.clipboard.readText().then((text) => {
+            if (typeof text !== 'string' || text === '' || text === UI.sysClipLast) return;
+            UI.sysClipLast = text;
+            document.getElementById('noVNC_clipboard_text').value = text;
+            UI.rfb.clipboardPasteFrom(text);
+        }).catch(() => {});
+    },
+
+'@.Replace("`r`n", "`n")
+$uiJs = $uiJs.Replace($clipAnchors.Receive, $clipAnchors.Receive + " UI.sysClipWrite(e.detail.text); /* mRemoteNG clipboard sync */")
+$uiJs = $uiJs.Replace($clipAnchors.Methods, $clipMethods + $clipAnchors.Methods)
+$uiJs = $uiJs.Replace($clipAnchors.Handlers, $clipAnchors.Handlers +
+    "`n        window.addEventListener('focus', UI.sysClipRead); /* mRemoteNG clipboard sync */" +
+    "`n        document.addEventListener('visibilitychange', () => { if (!document.hidden) UI.sysClipRead(); });")
+$uiJs = $uiJs.Replace($clipAnchors.Connect, $clipAnchors.Connect + " UI.sysClipRead(); /* mRemoteNG clipboard sync */")
+[IO.File]::WriteAllText($uiJsPath, $uiJs, (New-Object Text.UTF8Encoding $false))
+# 自己的 noVNC 修改放 Portable\noVNC-overrides\（同樣的相對路徑），每次打包都會蓋在官方檔案上，不會被沖掉。
+$noVncOverrides = Join-Path $rootPath 'Portable\noVNC-overrides'
+if (Test-Path -LiteralPath $noVncOverrides) {
+    Get-ChildItem -LiteralPath $noVncOverrides -Force | Copy-Item -Destination $noVncStage -Recurse -Force
+    Write-Output "noVNC overrides applied: $noVncOverrides"
+}
+# dist 現有的 noVNC 是否被手動改過：跟上次打包寫出的清單（相對路徑|SHA256）比；沒有清單時跟這次組出來的比。
+# 用清單比才分得出「腳本的補丁變了」跟「有人手改了 dist」。
+$noVncManifest = Join-Path $cachePath 'noVNC-manifest.txt'
+function Get-NoVncHashes([string]$folder) {
+    $base = (Resolve-Path -LiteralPath $folder).Path.TrimEnd('\') + '\'
+    $map = @{}
+    Get-ChildItem -LiteralPath $folder -Recurse -File -Force | ForEach-Object {
+        $map[$_.FullName.Substring($base.Length)] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+    }
+    $map
+}
+if ((Test-Path -LiteralPath $noVncPath) -and -not $OverwriteNoVnc) {
+    $existing = Get-NoVncHashes $noVncPath
+    $expected = @{}
+    if (Test-Path -LiteralPath $noVncManifest) {
+        foreach ($line in [IO.File]::ReadAllLines($noVncManifest)) {
+            $parts = $line.Split('|')
+            if ($parts.Count -eq 2) { $expected[$parts[0]] = $parts[1] }
+        }
+    } else {
+        $expected = Get-NoVncHashes $noVncStage
+    }
+    $modified = @($existing.Keys | Where-Object { -not $expected.ContainsKey($_) -or $expected[$_] -ne $existing[$_] } | Sort-Object)
+    if ($modified.Count -gt 0) {
+        throw ("dist 的 noVNC 有手動修改，這次不覆蓋（$noVncPath）：`n  " + ($modified -join "`n  ") +
+               "`n要保留：把這些檔案照相對路徑放進 Portable\noVNC-overrides\ 再打包。" +
+               "`n確定要丟掉：加 -OverwriteNoVnc。")
+    }
+}
+Remove-Item -LiteralPath $noVncPath -Recurse -Force -ErrorAction SilentlyContinue
+Move-Item -LiteralPath $noVncStage -Destination $noVncPath
+$written = Get-NoVncHashes $noVncPath
+[IO.File]::WriteAllLines($noVncManifest, [string[]]($written.Keys | Sort-Object | ForEach-Object { "$_|$($written[$_])" }))
 Copy-Item -LiteralPath (Join-Path $rootPath 'Portable\WinSCP.ini') -Destination $clientPath
 foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-Remote.cmd','ft-options.txt','使用說明.txt','ThirdParty.txt','File-Tunnel-LICENSE.md')) {
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath

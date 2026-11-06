@@ -157,7 +157,7 @@ public sealed class FtpSession(TcpClient control, FtpServer server)
     /// 經跳板路由連機台：File-Tunnel 要等跳板端連上才收連線，代理連不上時重試約 12 秒
     /// （WinSCP 預設 15 秒逾時，所以不能等更久）。
     /// </summary>
-    static RfbConnection ConnectThroughRoute(Func<Socks5Proxy> proxyFactory, string host, int vncPort, string password)
+    internal static RfbConnection ConnectThroughRoute(Func<Socks5Proxy> proxyFactory, string host, int vncPort, string password)
     {
         Socks5Proxy proxy;
         try { proxy = proxyFactory(); }

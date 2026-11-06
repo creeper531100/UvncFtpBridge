@@ -191,12 +191,23 @@ internal sealed class NoVncBridge(string baseDir, int port, Socks5Proxy? proxy, 
         {
             try
             {
-                json = await Task.Run(() => api!(name, ctx.Request.QueryString), ct);
+                // POST 的表單內容（application/x-www-form-urlencoded）併進參數：密碼這類值不放在網址上
+                var query = new System.Collections.Specialized.NameValueCollection(ctx.Request.QueryString);
+                if (ctx.Request.HasEntityBody)
+                {
+                    using var reader = new StreamReader(ctx.Request.InputStream, System.Text.Encoding.UTF8);
+                    var form = System.Web.HttpUtility.ParseQueryString(await reader.ReadToEndAsync(ct), System.Text.Encoding.UTF8);
+                    foreach (string? key in form.AllKeys)
+                        foreach (var value in form.GetValues(key) ?? Array.Empty<string>())
+                            query.Add(key, value);
+                }
+                json = await Task.Run(() => api!(name, query), ct);
                 if (json != null) status = 200;
             }
             catch (Exception ex)
             {
                 status = 500;
+                Log.Warn($"控制 API「{name}」失敗：{ex.Message}");
                 json = "{\"error\":" + System.Text.Json.JsonSerializer.Serialize(ex.Message) + "}";
             }
         }

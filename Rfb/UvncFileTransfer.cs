@@ -123,6 +123,42 @@ public sealed class UvncFileTransfer(RfbConnection conn)
         }
     }
 
+    /// <summary>
+    /// 取得機台登入使用者的桌面實際路徑（例如 "C:\Users\op\Desktop\"），順便回傳桌面上現有的項目。
+    /// UltraVNC 伺服器（vncclient.cpp「sf@2004 - Shortcuts Case」）列目錄時，路徑開頭是 "Desktop"
+    /// （或 viewer 送的 "[ Desktop ]"）就換成 CSIDL_DESKTOP，並在第一則回應把完整路徑送回來。
+    /// 上傳、建資料夾不會轉換這個名稱，所以要先用這個拿到真實路徑。
+    /// </summary>
+    public (string Path, List<RemoteEntry> Entries) ResolveDesktop()
+    {
+        lock (_op)
+        {
+            ushort param = (ushort)(RDirContent | (_c.SupportsUnicode ? UnicodeFlag : 0));
+            _c.SendFt(RfbConnection.FtDirContentRequest, param, 0, Enc("[ Desktop ]\\"));
+
+            var first = ReadUntil(RfbConnection.FtDirPacket);
+            ushort firstParam = (ushort)(first.Param & ~UnicodeFlag);
+            if (firstParam == ADirInaccessible || firstParam != ADirectory || first.Data.Length == 0)
+                throw new VncException("取得機台桌面路徑失敗（伺服器不支援「Desktop」捷徑，或沒有登入的使用者）。");
+
+            string path = PathEncoding.GetString(first.Data).Split('\0')[0].Trim();
+            if (path.Length < 3 || path[1] != ':' && !path.StartsWith(@"\\", StringComparison.Ordinal))
+                throw new VncException($"機台回傳的桌面路徑看不懂：「{path}」。");
+            if (!path.EndsWith('\\')) path += "\\";
+
+            var list = new List<RemoteEntry>();
+            while (true)
+            {
+                var msg = ReadUntil(RfbConnection.FtDirPacket);
+                ushort baseParam = (ushort)(msg.Param & ~UnicodeFlag);
+                if (baseParam != ADirectory && baseParam != AFile) break;
+                var entry = ParseFindData(msg.Data, (msg.Param & UnicodeFlag) != 0);
+                if (entry != null) list.Add(entry);
+            }
+            return (path, list);
+        }
+    }
+
     static RemoteEntry? ParseFindData(byte[] d, bool unicode)
     {
         if (d.Length < 44) return null;

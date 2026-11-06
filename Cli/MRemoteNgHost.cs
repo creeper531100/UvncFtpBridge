@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -9,7 +10,7 @@ using UvncFtpBridge.Rfb;
 namespace UvncFtpBridge.Cli;
 
 /// <summary>
-/// mRemoteNG 主機模式（--mremoteng）：給自編的 mRemoteNG 自動開、在背景一直跑。
+/// mRemoteNG 主機模式（--mremoteng）：給自編的 mRemoteNG 自動開，mRemoteNG 結束時跟著結束（/api/owner、/api/quit）。
 /// 跟 --open 一樣開 FTP 橋接（WinSCP）、UltraVNC Repeater（5999）與 noVNC（6080），但：
 ///   • 不自動開 WinSCP 與 Viewer，由 mRemoteNG 嵌進分頁；
 ///   • 同時支援直連與多個跳板：目標帶「路由~」就走那個跳板自己的 File-Tunnel（見 Route、RouteManager）；
@@ -32,6 +33,8 @@ internal static class MRemoteNgHost
         {
             Directory.CreateDirectory(Path.Combine(baseDir, "Logs"));
             Log.FilePath = Path.Combine(baseDir, "Logs", "launcher.log");
+            // 查問題用：設環境變數 UVNCFTPBRIDGE_VERBOSE=1 再讓 mRemoteNG 開通道，記錄檔會多 VNC 協定細節
+            if (Environment.GetEnvironmentVariable("UVNCFTPBRIDGE_VERBOSE") == "1") Log.Verbose = true;
 
             using var instance = PackageInstance.TryAcquire(baseDir);
             if (instance == null)
@@ -44,6 +47,8 @@ internal static class MRemoteNgHost
                 Log.Error("這份可攜套件已經用其他入口開著（Start-Direct／Start-FileTunnel 或 WinSCP 入口），請先關閉它再讓 mRemoteNG 開通道。");
                 return 1;
             }
+            try { Console.Title = "UvncFtpBridge - mRemoteNG 通道主機"; }
+            catch (IOException) { }
             using var hostFlag = PackageInstance.MarkTunnelHost(baseDir);
             using var mremotengFlag = PackageInstance.MarkMRemoteNgHost(baseDir);
             string portFile = PackageInstance.FtpPortFile(baseDir);
@@ -78,10 +83,67 @@ internal static class MRemoteNgHost
                 services.Add(Task.Run(() => ftp.Run(stop.Token)));
                 File.WriteAllText(portFile, ftp.Port.ToString(CultureInfo.InvariantCulture));
 
+                // mRemoteNG 登記自己的 PID：它結束（含當掉）時通道主機跟著結束；正常關閉時它會再呼叫 quit 立刻結束。
+                int ownerPid = 0;
+                string Owner(string? pidText)
+                {
+                    if (!int.TryParse(pidText, NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid <= 0)
+                        throw new ArgumentException("缺少 pid。");
+                    Process owner;
+                    try { owner = Process.GetProcessById(pid); }
+                    catch (ArgumentException) { throw new ArgumentException($"找不到程序 {pid}。"); }
+                    if (Interlocked.Exchange(ref ownerPid, pid) != pid)
+                    {
+                        Log.Info($"由 mRemoteNG（PID {pid}）管理：mRemoteNG 結束時通道主機跟著結束。");
+                        _ = WatchOwner(owner, pid);
+                    }
+                    else owner.Dispose();
+                    return "{\"owner\":" + pid.ToString(CultureInfo.InvariantCulture) + "}";
+                }
+                async Task WatchOwner(Process owner, int pid)
+                {
+                    using (owner)
+                    {
+                        try { await owner.WaitForExitAsync(stop.Token); }
+                        catch (OperationCanceledException) { return; }
+                    }
+                    if (Volatile.Read(ref ownerPid) != pid) return; // 已換成新的 mRemoteNG
+                    Log.Info("mRemoteNG 已結束，關閉通道主機。");
+                    stop.Cancel();
+                }
+                string Quit()
+                {
+                    Log.Info("mRemoteNG 關閉，結束通道主機。");
+                    // 先讓這個回應送出去再停
+                    _ = Task.Delay(200).ContinueWith(_ => stop.Cancel(), TaskScheduler.Default);
+                    return "{\"quit\":true}";
+                }
+
+                // 傳送檔案到桌面（VNC）：POST host、port、password、route（可省略＝直連）、file（可多筆）
+                string Desktop(System.Collections.Specialized.NameValueCollection query)
+                {
+                    string host = (query["host"] ?? "").Trim();
+                    if (host.Length == 0) throw new ArgumentException("缺少 host（機台 IP）。");
+                    int port = int.TryParse(query["port"], NumberStyles.None, CultureInfo.InvariantCulture, out var p) && p > 0 ? p : 5900;
+                    string password = query["password"] ?? "";
+                    string? route = string.IsNullOrWhiteSpace(query["route"]) ? null : query["route"]!.Trim();
+                    if (route != null && !Route.IsValidId(route)) throw new ArgumentException($"路由名稱不合法：{route}");
+                    var files = query.GetValues("file") ?? Array.Empty<string>();
+                    if (files.Length == 0) throw new ArgumentException("沒有要傳的檔案。");
+                    Log.Info(route == null ? $"傳送檔案到桌面：連線到機台 {host}:{port} …" : $"傳送檔案到桌面：連線到機台 {host}:{port}（經跳板 {route}）…");
+                    using var vnc = route == null
+                        ? RfbConnection.Connect(host, port, password, proxy: direct)
+                        : Ftp.FtpSession.ConnectThroughRoute(() => routes.Get(route), host, port, password);
+                    return DesktopSend.Run(vnc, files);
+                }
+
                 string? Api(string name, System.Collections.Specialized.NameValueCollection query) => name switch
                 {
                     "status" => Status(ftp.Port, repeater.Port, routes),
                     "route" => RouteJson(routes, query["id"]),
+                    "owner" => Owner(query["pid"]),
+                    "quit" => Quit(),
+                    "desktop" => Desktop(query),
                     _ => null,
                 };
                 var novnc = new NoVncBridge(baseDir, NoVncBridge.DefaultPort, direct, routeProxy, Api);
@@ -95,7 +157,7 @@ internal static class MRemoteNgHost
                 Console.WriteLine("mRemoteNG 通道主機已就緒，WinSCP、UltraVNC、noVNC 分頁都經由這裡連到機台。");
                 Console.WriteLine("  有設「跳板通道」的連線會自動開那個跳板自己的 File-Tunnel；");
                 Console.WriteLine("  請在跳板（RDP 分頁）執行 Start-FileTunnel-Remote.cmd（已在執行就不用再開）。");
-                Console.WriteLine("此視窗可以縮到最小；按 Q 或關閉此視窗即結束所有通道。");
+                Console.WriteLine("關閉這個「通道主機」分頁、關閉 mRemoteNG 或按 Q，即結束所有通道。");
                 Console.WriteLine();
                 WaitForQuit(stop.Token);
                 return 0;
@@ -119,6 +181,9 @@ internal static class MRemoteNgHost
             json.WriteNumber("ftpPort", ftpPort);
             json.WriteNumber("repeaterPort", repeaterPort);
             json.WriteNumber("noVncPort", NoVncBridge.DefaultPort);
+            // 主控台視窗 handle：mRemoteNG 用它把這個視窗嵌進「通道主機」分頁
+            json.WriteNumber("consoleWindow", GetConsoleWindow().ToInt64());
+            json.WriteNumber("pid", Environment.ProcessId);
             json.WriteStartArray("routes");
             foreach (var (route, socksPort, online) in routes.Snapshot()) WriteRoute(json, route, socksPort, online);
             json.WriteEndArray();
@@ -148,6 +213,9 @@ internal static class MRemoteNgHost
         json.WriteEndObject();
     }
 
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetConsoleWindow();
+
     static void WaitForQuit(CancellationToken ct)
     {
         if (Console.IsInputRedirected)
@@ -155,8 +223,14 @@ internal static class MRemoteNgHost
             ct.WaitHandle.WaitOne();
             return;
         }
+        // 不能卡在 ReadKey：mRemoteNG 結束（quit／owner 監看）時要能馬上離開
         while (!ct.IsCancellationRequested)
         {
+            if (!Console.KeyAvailable)
+            {
+                ct.WaitHandle.WaitOne(100);
+                continue;
+            }
             var key = Console.ReadKey(intercept: true).Key;
             if (key is ConsoleKey.Q or ConsoleKey.Escape) return;
         }
