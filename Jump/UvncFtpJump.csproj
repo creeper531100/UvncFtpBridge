@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    跳板端（RDP 跳板上執行）：.NET Framework 4.0 起都能跑（Win7／2008R2 只要裝過任何 4.x），
+    exe 只有幾十 KB，經 \\tsclient 比對、複製都很快。本機端 UvncFtpBridge 仍是 .NET 9。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net40</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>UvncFtpJump</AssemblyName>
+    <RootNamespace>UvncFtpJump</RootNamespace>
+    <Version>1.0.0</Version>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- 不產生 UvncFtpJump.exe.config：跳板上只要一個 exe -->
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+</Project>

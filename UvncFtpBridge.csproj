@@ -13,9 +13,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="tests\**;dist\**" />
-    <EmbeddedResource Remove="tests\**;dist\**" />
-    <None Remove="tests\**;dist\**" />
+    <Compile Remove="tests\**;dist\**;Jump\**" />
+    <EmbeddedResource Remove="tests\**;dist\**;Jump\**" />
+    <None Remove="tests\**;dist\**;Jump\**" />
   </ItemGroup>
 
   <ItemGroup>

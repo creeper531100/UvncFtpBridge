@@ -13,9 +13,6 @@ static class Program
         // 讓 CP950（Big5）可用，給不支援 UTF-8 的舊版 UltraVNC 伺服器用
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        // 跳板端（可能是 Windows 7）不動主控台編碼，ft.exe 也直接寫在同一個主控台
-        if (args.Length > 0 && args[0] is "--remote") return RemoteCommand.Run(args.Skip(1).ToArray());
-
         Console.OutputEncoding = Encoding.UTF8;
 
         if (args.Length == 0 || args[0] is "--help" or "-h" or "/?" or "help")

@@ -34,16 +34,26 @@ if (-not (Test-Path -LiteralPath $translationZip)) {
     Invoke-WebRequest -Uri "https://winscp.net/translations/dll/$version/ch.zip" -OutFile $translationZip
 }
 Expand-Archive -LiteralPath $translationZip -DestinationPath $clientPath -Force
-$ftVersion = 'v3.5.5'
-$ftHash = '25A5A7A248522B2F8FD310CCD7BC627A26F363D551C66162EF47DDD7BB9588C2'
-$ftCache = Join-Path $cachePath "ft-$ftVersion-win-x64.exe"
-if (-not (Test-Path -LiteralPath $ftCache)) {
-    Invoke-WebRequest -Uri "https://github.com/fiddyschmitt/File-Tunnel/releases/download/$ftVersion/ft-win-x64.exe" -OutFile $ftCache
+# ft.exe 從原始碼自己編（不用官方發布的 exe）：
+#   這個專案旁邊沒有 File-Tunnel 就自動 git clone v3.5.5（放在 ..\File-Tunnel）。
+#   官方 v3.5.5 目標是 net10.0；這裡用 .NET 9 SDK 編，所以自動把 ft\ft.csproj 改成 net9.0（只改這一行，程式碼不動）。
+#   發布方式跟官方 build-release.ps1 說的一樣：Release、自包含、單一檔案、修剪（另加壓縮）。
+$ftTag = 'v3.5.5'
+$ftSource = Join-Path (Split-Path -Parent $rootPath) 'File-Tunnel'
+$ftProject = Join-Path $ftSource 'ft\ft.csproj'
+if (-not (Test-Path -LiteralPath $ftProject)) {
+    & git clone --depth 1 --branch $ftTag https://github.com/fiddyschmitt/File-Tunnel.git $ftSource
+    if ($LASTEXITCODE -ne 0) { throw "File-Tunnel clone failed: $ftSource" }
 }
-if ((Get-FileHash -LiteralPath $ftCache -Algorithm SHA256).Hash -ne $ftHash) {
-    throw 'File-Tunnel SHA-256 does not match the pinned release checksum.'
+$ftCsproj = [IO.File]::ReadAllText($ftProject)
+if ($ftCsproj.Contains('<TargetFramework>net10.0</TargetFramework>')) {
+    [IO.File]::WriteAllText($ftProject, $ftCsproj.Replace('<TargetFramework>net10.0</TargetFramework>', '<TargetFramework>net9.0</TargetFramework>'), (New-Object Text.UTF8Encoding $true))
 }
-Copy-Item -LiteralPath $ftCache -Destination (Join-Path $packagePath 'ft.exe') -Force
+$ftOutput = Join-Path $rootPath 'dist\File-Tunnel'
+& dotnet publish $ftProject -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true `
+    -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -o $ftOutput
+if ($LASTEXITCODE -ne 0) { throw 'File-Tunnel build failed (ft.csproj must target net9.0 for the .NET 9 SDK).' }
+Copy-Item -LiteralPath (Join-Path $ftOutput 'ft.exe') -Destination (Join-Path $packagePath 'ft.exe') -Force
 $viewerVersion = '1.4.3.6'
 if (-not (Test-Path -LiteralPath $VncViewerPath)) { throw "UltraVNC Viewer not found: $VncViewerPath (install UltraVNC $viewerVersion or pass -VncViewerPath)." }
 $viewerSignature = Get-AuthenticodeSignature -LiteralPath $VncViewerPath
@@ -67,6 +77,11 @@ $cliFiles = @(if ($FrameworkDependent) {
     Get-Item -LiteralPath (Join-Path $rootPath 'dist\UvncFtpBridge.exe')
 })
 foreach ($cliFile in $cliFiles) { Copy-Item -LiteralPath $cliFile.FullName -Destination $packagePath }
+# 跳板端 UvncFtpJump.exe（.NET Framework 4，Win7 跳板可用；不再用 UvncFtpBridge.exe --remote）
+$jumpOutput = Join-Path $rootPath 'dist\Jump'
+& dotnet build (Join-Path $rootPath 'Jump\UvncFtpJump.csproj') -c Release -o $jumpOutput
+if ($LASTEXITCODE -ne 0) { throw 'UvncFtpJump build failed.' }
+Copy-Item -LiteralPath (Join-Path $jumpOutput 'UvncFtpJump.exe') -Destination $packagePath -Force
 # noVNC (served by --open for mRemoteNG tabs): official release beside the exe in noVNC.
 # Ours: defaults.json (autoconnect + scale to the tab), the UltraVNC cursor patch to core/rfb.js and the
 # Windows clipboard sync patch to app/ui.js below.
@@ -203,7 +218,7 @@ foreach ($item in @('Start-Direct.cmd','Start-FileTunnel.cmd','Start-FileTunnel-
     Copy-Item -LiteralPath (Join-Path $rootPath "Portable\$item") -Destination $packagePath
 }
 # Drop entry points from earlier builds: two launchers (direct / File-Tunnel) now open WinSCP and UltraVNC together,
-# and the jump-host side runs as "UvncFtpBridge.exe --remote" instead of a PowerShell script.
+# and the jump-host side runs as UvncFtpJump.exe instead of a PowerShell script.
 foreach ($old in @('Start-WinSCP.vbs','Start-WinSCP.cmd','Start-WinSCP-FileTunnel.vbs','Start-WinSCP-FileTunnel.cmd','Start-VNC-FileTunnel.cmd','Start-FileTunnel-Remote.ps1')) {
     Remove-Item -LiteralPath (Join-Path $packagePath $old) -ErrorAction SilentlyContinue
 }
@@ -228,6 +243,7 @@ $files = @(
     (Join-Path $packagePath 'ThirdParty.txt'),
     (Join-Path $packagePath 'File-Tunnel-LICENSE.md'),
     (Join-Path $packagePath 'ft.exe'),
+    (Join-Path $packagePath 'UvncFtpJump.exe'),
     $noVncPath,
     $clientPath,
     $viewerPath

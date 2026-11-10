@@ -34,11 +34,11 @@ WinSCP 主機欄：機台真實 IP / VNC 埠
 
 ### 經 File-Tunnel 與 RDP 磁碟重新導向連內網機台
 
-完整步驟見 [File-Tunnel 部署教學](DEPLOY-FILE-TUNNEL.zh-TW.md)。File-Tunnel 使用 RDP 已提供的本機磁碟重新導向，無須註冊 mstsc 外掛；本機與跳板各執行一份官方 `ft.exe`。
+完整步驟見 [File-Tunnel 部署教學](DEPLOY-FILE-TUNNEL.zh-TW.md)。File-Tunnel 使用 RDP 已提供的本機磁碟重新導向，無須註冊 mstsc 外掛；本機與跳板各執行一份 `ft.exe`（由 File-Tunnel v3.5.5 原始碼自編，見 Build-Portable.ps1）。
 
 1. 本機雙擊 **Start-FileTunnel.cmd**（`UvncFtpBridge.exe --open --file-tunnel`）。WinSCP 與 Viewer 立即開啟，本機 SOCKS5 `127.0.0.1:1081` 等待跳板。
 2. 自行用 mstsc 連到這次的跳板，連線設定須勾選本機 C 槽重新導向。
-3. 在跳板執行 **Start-FileTunnel-Remote.cmd**（與 `UvncFtpBridge.exe`、`ft.exe` 放同一資料夾；它執行 `UvncFtpBridge.exe --remote`，不需 PowerShell，Windows 7 也可用）。保持視窗開啟。
+3. 在跳板執行 **Start-FileTunnel-Remote.cmd**（與 `UvncFtpJump.exe`、`ft.exe` 放同一資料夾；它啟動 `UvncFtpJump.exe`，.NET Framework 4，不需 PowerShell，Windows 7 也可用）。保持視窗開啟。
 4. WinSCP 站台或 Viewer 填**目標機台的真實 IP**，連線。
 
 ```text

@@ -420,10 +420,10 @@ public static class CliCommands
           WinSCP 帳號 ultravnc~跳板、noVNC ws/跳板~機台、Repeater 跳板~機台:埠。已在執行時直接結束。
 
         【跳板端（RDP 跳板上執行）】
-          UvncFtpBridge --remote [磁碟代號 | 完整重新導向路徑] [--route 跳板名稱]
-          從 \\tsclient\C 找本機啟動檔的共用資料夾，用旁邊的 ft.exe 接上；本機重開時自動重接。
-          本機系統磁碟不是 C 時給磁碟代號，例如 --remote D。
-          mRemoteNG 主機模式的多跳板通道會依本機電腦名稱／IP 自動對應；名稱對不上時用 --route 指定。
+          另一支程式 UvncFtpJump.exe（.NET Framework 4，Win7 可用），跟 ft.exe 放同一資料夾：
+          UvncFtpJump [磁碟代號 | 完整重新導向路徑] [--route 跳板名稱] [--name 顯示名稱] [--source 來源資料夾]
+          從 \\tsclient\C 找本機的共用資料夾，用旁邊的 ft.exe 接上；常駐，RDP 斷線不結束，本機重開時自動重接。
+          mRemoteNG「部署跳板通道」會自動複製並啟動它；有 --source 時跟來源不一樣就自動更新。
 
         【其他】
           UvncFtpBridge --selftest   內建自我測試

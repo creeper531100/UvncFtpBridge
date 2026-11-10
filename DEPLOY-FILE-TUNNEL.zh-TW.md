@@ -16,7 +16,7 @@ UltraVNC Viewer 不支援 SOCKS5，但支援 UltraVNC Repeater；本機在 `127.
 
 1. 本機解壓縮 `dist/UltraVNC-WinSCP-FileTunnel-Portable.zip` 到可寫入的資料夾。`ft.exe`、WinSCP、UltraVNC Viewer 與橋接程式都在同一套件。
 2. 在 mstsc 的「顯示選項 → 本機資源 → 詳細資料」勾選本機 **C:** 磁碟。每次連線若選用不同的 RDP 設定檔，都要確認此項；修改後請重新建立 RDP 連線。
-3. 把套件中的 `UvncFtpBridge.exe`、`ft.exe` 與 `Start-FileTunnel-Remote.cmd` 複製到**每一台要用的跳板**的同一資料夾。跳板端由 `UvncFtpBridge.exe --remote` 處理，不需安裝或註冊，Windows 7 跳板也可用。
+3. 把套件中的 `UvncFtpJump.exe`、`ft.exe` 與 `Start-FileTunnel-Remote.cmd` 複製到**每一台要用的跳板**的同一資料夾。跳板端由 `UvncFtpJump.exe`（.NET Framework 4）處理，不需安裝或註冊，Windows 7 跳板也可用。
 4. （可選）把套件的 `WinSCP\WinSCP.exe` 與 `UltraVNC\vncviewer.exe` 釘選到工作列。
 
 ## 每次使用
@@ -41,7 +41,7 @@ File-Tunnel 要等跳板端連上才開始接受連線（log 出現 `Started SOC
 
 `ft.exe` 本身在本機磁碟上可達每秒數十 MB；經跳板時的瓶頸是 RDP 磁碟重新導向（`\\tsclient`），每次寫入共用檔都要經 RDP 來回一次。檔案傳輸會自動要求 zlib 壓縮，文字檔（CSV、log）實際傳得比較快。
 
-要調整 `ft.exe`，在 `UvncFtpBridge.exe` 旁放 `ft-options.txt`，內容會附加到 `ft.exe` 參數（空白分隔，`#` 開頭為註解）。本機與跳板各自讀自己那份：下載主要受跳板端那份影響（跳板寫 `to-local.dat`），上傳主要受本機那份影響。可以試：
+要調整 `ft.exe`，在 `UvncFtpBridge.exe`（跳板是 `UvncFtpJump.exe`）旁放 `ft-options.txt`，內容會附加到 `ft.exe` 參數（空白分隔，`#` 開頭為註解）。本機與跳板各自讀自己那份：下載主要受跳板端那份影響（跳板寫 `to-local.dat`），上傳主要受本機那份影響。可以試：
 
 ```text
 --read-duration 200
