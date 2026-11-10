@@ -174,6 +174,19 @@ $uiJs = $uiJs.Replace($clipAnchors.Handlers, $clipAnchors.Handlers +
     "`n        document.addEventListener('visibilitychange', () => { if (!document.hidden) UI.sysClipRead(); });")
 $uiJs = $uiJs.Replace($clipAnchors.Connect, $clipAnchors.Connect + " UI.sysClipRead(); /* mRemoteNG clipboard sync */")
 [IO.File]::WriteAllText($uiJsPath, $uiJs, (New-Object Text.UTF8Encoding $false))
+# mRemoteNG 整合（Portable\noVNC-overrides\app\mremoteng.js）：常駐狀態列、通道沒接上時「連線」改成部署跳板通道。
+# 在 UI.start 之前掛上，才攔得到自動連線的狀態。
+$vncHtmlPath = Join-Path $noVncStage 'vnc.html'
+$vncHtml = [IO.File]::ReadAllText($vncHtmlPath)
+$htmlAnchors = @{ Import = 'import UI from "./app/ui.js";'; Start = 'UI.start({ settings:' }
+foreach ($anchor in $htmlAnchors.Values) {
+    if (([regex]::Matches($vncHtml, [regex]::Escape($anchor))).Count -ne 1) {
+        throw "noVNC vnc.html changed: mRemoteNG patch anchor not found exactly once: $anchor"
+    }
+}
+$vncHtml = $vncHtml.Replace($htmlAnchors.Import, $htmlAnchors.Import + "`n        import MRemoteNG from `"./app/mremoteng.js`"; /* mRemoteNG */")
+$vncHtml = $vncHtml.Replace($htmlAnchors.Start, "MRemoteNG.start(UI); /* mRemoteNG */`n        " + $htmlAnchors.Start)
+[IO.File]::WriteAllText($vncHtmlPath, $vncHtml, (New-Object Text.UTF8Encoding $false))
 # 自己的 noVNC 修改放 Portable\noVNC-overrides\（同樣的相對路徑），每次打包都會蓋在官方檔案上，不會被沖掉。
 $noVncOverrides = Join-Path $rootPath 'Portable\noVNC-overrides'
 if (Test-Path -LiteralPath $noVncOverrides) {
