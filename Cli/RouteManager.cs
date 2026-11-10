@@ -13,7 +13,14 @@ internal sealed class RouteManager(string baseDir) : IDisposable
 {
     const int FirstSocksPort = 1082;
 
-    sealed record Entry(FileTunnelSession Session, int SocksPort);
+    sealed record Entry(FileTunnelSession Session, int SocksPort, JumpLogTail JumpLog)
+    {
+        public void Dispose()
+        {
+            JumpLog.Dispose();
+            Session.Dispose();
+        }
+    }
 
     readonly Dictionary<string, Entry> routes = new(StringComparer.OrdinalIgnoreCase);
     readonly object gate = new();
@@ -30,12 +37,12 @@ internal sealed class RouteManager(string baseDir) : IDisposable
             {
                 if (!entry.Session.HasExited) return new Socks5Proxy("127.0.0.1", entry.SocksPort);
                 Log.Warn($"File-Tunnel [{route}] 已結束，重新開啟。");
-                entry.Session.Dispose();
+                entry.Dispose();
                 routes.Remove(route);
             }
             int port = FreePort(routes.Values.Select(e => e.SocksPort).ToHashSet());
             var session = FileTunnelSession.Start(baseDir, FileTunnelSession.RouteFolder(route), port, route);
-            routes[route] = new Entry(session, port);
+            routes[route] = new Entry(session, port, new JumpLogTail(route));
             return new Socks5Proxy("127.0.0.1", port);
         }
     }
@@ -51,7 +58,7 @@ internal sealed class RouteManager(string baseDir) : IDisposable
         {
             if (disposed) return;
             disposed = true;
-            foreach (var entry in routes.Values) entry.Session.Dispose();
+            foreach (var entry in routes.Values) entry.Dispose();
             routes.Clear();
         }
     }

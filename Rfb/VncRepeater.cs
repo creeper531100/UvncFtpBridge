@@ -159,18 +159,15 @@ public sealed class VncRepeater(IPAddress bindAddress, int port, Socks5Proxy? pr
             open[tcp] = 0;
             try
             {
-                await Task.Run(() => proxy.Connect(tcp, host, targetPort, 15000), ct);
+                await Task.Run(() => proxy.Connect(tcp, host, targetPort, Route.AttemptTimeoutMs), ct);
                 return tcp;
             }
-            catch (VncException ex) when (ex.Message.StartsWith(Socks5Proxy.UnreachableMessage, StringComparison.Ordinal) && DateTime.UtcNow < deadline)
+            catch (VncException ex) when (Socks5Proxy.IsRetryable(ex) && DateTime.UtcNow < deadline)
             {
+                // 代理還沒開，或請求在通道重啟時丟了（收了連線卻沒回覆）：重送
                 open.TryRemove(tcp, out _);
                 tcp.Dispose();
-                if (!announced)
-                {
-                    Log.Info($"跳板端通道還沒就緒，最多等 {ProxyWait.TotalSeconds:0} 秒…（請確認跳板已執行 Start-FileTunnel-Remote.cmd）");
-                    announced = true;
-                }
+                announced = Route.AnnounceRetry(ex, ProxyWait, announced);
                 await Task.Delay(1000, ct);
             }
             catch

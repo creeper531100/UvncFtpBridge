@@ -176,6 +176,8 @@ static class Program
         Check(relay == null, "Repeater 等代理晚 1.5 秒才開（跳板端還沒連上）" + (relay == null ? "" : "：" + relay));
         relay = RepeaterExchange(ipv4Request, 0, route: "jumpA");
         Check(relay == null, "Repeater 依「路由~機台」改走那條路由的代理" + (relay == null ? "" : "：" + relay));
+        relay = RepeaterExchange(ipv4Request, 0, dropFirst: true);
+        Check(relay == null, "Repeater 第一次請求沒回覆（通道剛好重啟）時重送" + (relay == null ? "" : "：" + relay));
 
         Console.WriteLine(fail == 0 ? "\n全部通過。" : $"\n有 {fail} 項失敗。");
         return fail == 0 ? 0 : 1;
@@ -195,14 +197,24 @@ static class Program
     }
 
     /// <summary>假 Viewer → Repeater → 假 SOCKS5：檢查交握、CONNECT 位元組與兩個方向的資料。</summary>
-    static string? RepeaterExchange(byte[] expectedRequest, int proxyDelayMs, string? route = null)
+    static string? RepeaterExchange(byte[] expectedRequest, int proxyDelayMs, string? route = null, bool dropFirst = false)
     {
+        if (dropFirst) proxyDelayMs = 2000; // 只借用它放寬下面的等待時間；代理一開始就開著
         var socks = new System.Net.Sockets.TcpListener(IPAddress.Loopback, UnusedPort());
-        if (proxyDelayMs == 0) socks.Start();
+        if (proxyDelayMs == 0 || dropFirst) socks.Start();
         bool requestOk = false;
         var fakeProxy = Task.Run(() =>
         {
-            if (proxyDelayMs > 0)
+            if (dropFirst)
+            {
+                // 收了請求卻不回覆就關掉：File-Tunnel 在請求送出的當下重啟時就是這樣
+                using var lost = socks.AcceptTcpClient();
+                var ls = lost.GetStream();
+                ls.ReadExactly(new byte[3]);
+                ls.Write(new byte[] { 5, 0 });
+                ls.ReadExactly(new byte[expectedRequest.Length]);
+            }
+            else if (proxyDelayMs > 0)
             {
                 Thread.Sleep(proxyDelayMs);
                 socks.Start();

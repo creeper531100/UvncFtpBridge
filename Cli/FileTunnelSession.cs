@@ -14,12 +14,43 @@ internal sealed class FileTunnelSession : IDisposable
     readonly Process process;
     readonly string shared;
     readonly CounterpartStatus status;
+    readonly ChildProcessJob? job;
 
-    FileTunnelSession(Process process, string shared, CounterpartStatus status)
+    FileTunnelSession(Process process, string shared, CounterpartStatus status, ChildProcessJob? job)
     {
         this.process = process;
         this.shared = shared;
         this.status = status;
+        this.job = job;
+    }
+
+    /// <summary>
+    /// 清掉上一個通道主機沒收乾淨的 ft.exe（同一個工作階段、旁邊有 UvncFtpBridge.exe 的才算）。
+    /// 只能在確定本機沒有其他通道主機時呼叫（Repeater 埠綁得上才算）。
+    /// </summary>
+    public static void KillOrphans()
+    {
+        int session = Process.GetCurrentProcess().SessionId;
+        foreach (var ft in Process.GetProcessesByName("ft"))
+        {
+            using (ft)
+            {
+                try
+                {
+                    if (ft.SessionId != session) continue;
+                    string? path = ft.MainModule?.FileName;
+                    string? dir = path == null ? null : Path.GetDirectoryName(path);
+                    if (dir == null || !File.Exists(Path.Combine(dir, "UvncFtpBridge.exe"))) continue;
+                    ft.Kill(entireProcessTree: true);
+                    ft.WaitForExit(3000);
+                    Log.Warn($"清掉殘留的 ft.exe（PID {ft.Id}，{path}）：上一個通道主機沒有正常結束，它會搶共用檔和 SOCKS 埠。");
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+                {
+                    // 已經結束，或是別的帳號的程序：跳過
+                }
+            }
+        }
     }
 
     /// <summary>跳板端已連上（ft.exe 回報 Counterpart: Online）。</summary>
@@ -73,12 +104,14 @@ internal sealed class FileTunnelSession : IDisposable
         try
         {
             if (!process.Start()) throw new IOException("無法啟動 File-Tunnel。");
+            var job = ChildProcessJob.Attach(process);
+            if (job == null) Log.Warn($"{label}：無法把 ft.exe 綁到通道主機，主機異常結束時它可能殘留（下次啟動會清掉）。");
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             if (process.WaitForExit(500))
                 throw new IOException($"{label} 啟動失敗（結束碼 {process.ExitCode}）。請查看 Logs\\launcher.log；確認本機 {socksPort} 埠未被佔用。");
             Log.Info($"{label} 已啟動；本機 SOCKS5 127.0.0.1:{socksPort}，共用資料夾 {shared}。等待你連接 RDP 並啟動跳板端。");
-            return new FileTunnelSession(process, shared, status);
+            return new FileTunnelSession(process, shared, status, job);
         }
         catch
         {
@@ -100,6 +133,7 @@ internal sealed class FileTunnelSession : IDisposable
         catch (InvalidOperationException) { }
         finally
         {
+            job?.Dispose();
             process.Dispose();
             Cleanup(shared);
         }
@@ -169,8 +203,9 @@ internal sealed class FileTunnelSession : IDisposable
             try { File.Delete(Path.Combine(shared, "active.marker")); break; }
             catch (IOException) { Thread.Sleep(250); }
         }
-        // The jump-side process notices the marker disappear and releases its file handles.
-        for (int attempt = 0; attempt < 8; attempt++)
+        // 跳板端（UvncFtpJump）常駐、不看標記檔，RDP 還連著時它的 ft.exe 會一直開著這兩個檔：刪不掉就留著，
+        // 下次開通道直接沿用，不要為了等它放手拖慢關閉。
+        for (int attempt = 0; attempt < 2; attempt++)
         {
             try
             {

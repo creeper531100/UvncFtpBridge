@@ -77,6 +77,7 @@ internal static class MRemoteNgHost
             {
                 var repeater = new VncRepeater(IPAddress.Loopback, VncRepeater.DefaultPort, direct, routeProxy);
                 repeater.Start();
+                FileTunnelSession.KillOrphans(); // 綁得上 Repeater 埠＝本機沒有別的通道主機，現在還在的 ft.exe 都是殘留
                 services.Add(Task.Run(() => repeater.RunAsync(stop.Token)));
                 var ftp = new FtpServer(IPAddress.Loopback, 0, 5900, proxy: direct, routes: routeProxy);
                 ftp.Start();

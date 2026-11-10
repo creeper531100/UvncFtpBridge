@@ -10,22 +10,25 @@ using System.Threading.Tasks;
 namespace UvncFtpJump
 {
     /// <summary>
-    /// 跳板端通道（原本的 UvncFtpBridge --remote）：經 RDP 磁碟重新導向找到本機的通道資料夾，用旁邊的 ft.exe 接上。
-    /// 常駐：RDP 斷線不結束、ft.exe 也不主動停（連回來就接著用，不用重連）；本機重開（標記檔內容變了）就換新的 ft.exe；
-    /// ft.exe 自己結束就等一下再開。只有關視窗才結束。
+    /// 跳板端通道（原本的 UvncFtpBridge --remote）：經 RDP 磁碟重新導向用旁邊的 ft.exe 接上本機的通道資料夾。
+    /// 常駐、不看標記檔：ft.exe 開了就一直跑，RDP 斷線、本機關閉通道、本機重開通道都交給 ft.exe 自己處理
+    /// （它會自己重新開檔、偵測對方換了 session）。我們不主動關它，才不會在通道剛接上時又斷一次。
+    /// ft.exe 自己結束才重開。只有關視窗才結束。
+    /// 資料夾位置：start.bat 帶的 --source 推得出來就直接用（不用等資料夾出現）；否則掃 \\tsclient 找。
     /// </summary>
     internal sealed class TunnelWorker
     {
         /// <summary>多跳板通道的資料夾：本機 %TEMP%\UvncFtpBridge\Routes\&lt;路由&gt;（跟 UvncFtpBridge 的 FileTunnelSession 一樣）。</summary>
         const string RoutesFolderName = "Routes";
-        /// <summary>讀不到標記檔超過這麼久，畫面改顯示「RDP 斷線」（ft.exe 照跑）。</summary>
+        const string BridgeFolderName = "UvncFtpBridge";
+        /// <summary>看不到 \\tsclient 超過這麼久，畫面改顯示「RDP 斷線」（ft.exe 照跑）。</summary>
         const int ShowDisconnectedAfterMs = 5000;
-
-        enum MarkerState { Read, Gone, Unknown }
+        /// <summary>每隔多久把共用檔的大小與時間寫進記錄檔。</summary>
+        const int FileReportMs = 15000;
 
         readonly JumpState state;
         readonly string baseDir;
-        readonly string explicitPath;
+        readonly string fixedFolder;
         readonly string profiles;
         readonly string routeArg;
         readonly HashSet<string> identities;
@@ -35,19 +38,42 @@ namespace UvncFtpJump
         Thread thread;
         /// <summary>曾經看到過 \\tsclient：之後再看不到就是 RDP 斷線（不是一開始就沒開磁碟重新導向）。</summary>
         bool sawRedirection;
-        long missingSince = -1;
         readonly Stopwatch clock = Stopwatch.StartNew();
 
-        public TunnelWorker(JumpState state, string baseDir, string explicitPath, string profiles, string routeArg)
+        /// <param name="fixedFolder">已經知道的通道資料夾（完整路徑），不知道就給 null 用掃的。</param>
+        public TunnelWorker(JumpState state, string baseDir, string fixedFolder, string profiles, string routeArg)
         {
             this.state = state;
             this.baseDir = baseDir;
-            this.explicitPath = explicitPath;
+            this.fixedFolder = fixedFolder;
             this.profiles = profiles;
             this.routeArg = routeArg;
             identities = routeArg == null
                 ? OwnIdentities()
                 : new HashSet<string>(StringComparer.OrdinalIgnoreCase) { routeArg };
+        }
+
+        /// <summary>
+        /// start.bat 的 --source 是本機 TEMP 底下的 ufbdeploy/UvncFtpBridge；通道資料夾在同一個 TEMP 底下：
+        /// %TEMP%\UvncFtpBridge\Routes\&lt;路由&gt;。推不出來回 null。
+        /// </summary>
+        public static string FolderFromSource(string source, string route)
+        {
+            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(route)) return null;
+            try
+            {
+                string deploy = Path.GetDirectoryName(source.TrimEnd('\\'));
+                string temp = string.IsNullOrEmpty(deploy) ? null : Path.GetDirectoryName(deploy);
+                if (string.IsNullOrEmpty(temp)) return null;
+                return Path.Combine(Path.Combine(Path.Combine(temp, BridgeFolderName), RoutesFolderName), route);
+            }
+            catch (ArgumentException) { return null; }
+        }
+
+        /// <summary>正在跑的那份把它用的通道資料夾記在這裡，start.bat 再跑一次時用來判斷是不是換了一台本機。</summary>
+        public static string CurrentFolderFile
+        {
+            get { return Path.Combine(Path.GetTempPath(), "UvncFtpJump.tunnel"); }
         }
 
         public void Start()
@@ -78,31 +104,30 @@ namespace UvncFtpJump
             }
             var extraOptions = ExtraOptions();
             if (extraOptions.Count > 0) state.Log("ft.exe 額外參數（ft-options.txt）：" + string.Join(" ", extraOptions.ToArray()));
-            if (routeArg == null && explicitPath == null)
+            if (fixedFolder == null && routeArg == null)
                 state.Log("這台跳板的通道名稱：" + string.Join("、", identities.OrderBy(x => x).ToArray()));
 
             while (!stopping)
             {
-                string shared = WaitForLocalTunnel();
+                string shared = fixedFolder ?? WaitForLocalTunnel();
                 if (shared == null) return;
-                string marker = Path.Combine(shared, "active.marker");
-                string session = null;
-                for (int attempt = 0; session == null && attempt < 10 && !stopping; attempt++)
-                {
-                    string content;
-                    if (ReadMarker(marker, out content) == MarkerState.Read) session = content;
-                    else Thread.Sleep(200);
-                }
-                if (session == null) continue;
-                RunFt(ft, shared, marker, session, extraOptions);
+                Remember(shared);
+                RunFt(ft, shared, extraOptions);
             }
         }
 
-        /// <summary>一個本機通道 session：開 ft.exe，盯著標記檔，直到本機重開／關閉或 ft.exe 結束。</summary>
-        void RunFt(string ft, string shared, string marker, string session, List<string> extraOptions)
+        static void Remember(string shared)
         {
-            state.Log("找到本機通道：" + shared);
-            state.SetTunnel("已找到（" + session + "）");
+            try { File.WriteAllText(CurrentFolderFile, shared); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        /// <summary>開 ft.exe 並一直留著，直到它自己結束或關視窗。這裡只負責更新畫面上的狀態。</summary>
+        void RunFt(string ft, string shared, List<string> extraOptions)
+        {
+            state.Log("通道資料夾：" + shared);
+            state.SetTunnel(shared);
             var args = new StringBuilder();
             args.Append("--read ").Append(Quote(Path.Combine(shared, "to-remote.dat")));
             args.Append(" --write ").Append(Quote(Path.Combine(shared, "to-local.dat")));
@@ -120,27 +145,48 @@ namespace UvncFtpJump
             };
             var process = new Process { StartInfo = start };
             string counterpart = null;
+            bool rdpDown = false;
+            var noise = new HashSet<string>();
+            var statusGate = new object();
+            Action show = () =>
+            {
+                // rdpDown、counterpart 兩個來源（ft.exe 輸出、下面的迴圈）都會改，一起決定畫面
+                if (rdpDown) state.SetPhase(Phase.Disconnected, "程式不會結束，連回來後自動接上");
+                else if (counterpart == "Online") state.SetPhase(Phase.Connected, "通道正常，可以使用 VNC／WinSCP");
+                else state.SetPhase(Phase.WaitingLocal, "ft.exe 已就緒，等待本機 mRemoteNG 開啟經這台跳板的機台");
+            };
             DataReceivedEventHandler onLine = (s, e) =>
             {
                 if (e.Data == null) return;
-                int at = e.Data.IndexOf("Counterpart:", StringComparison.Ordinal);
-                if (at < 0)
+                string line = e.Data.Trim();
+                int at = line.IndexOf("Counterpart:", StringComparison.Ordinal);
+                lock (statusGate)
                 {
-                    if (e.Data.Trim().Length > 0) state.Log("ft.exe：" + e.Data.Trim());
-                    return;
-                }
-                string now = e.Data.Substring(at + "Counterpart:".Length).Trim().Split(' ')[0];
-                if (now == counterpart) return;
-                counterpart = now;
-                if (now == "Online")
-                {
-                    state.Log("本機已回應，通道接上");
-                    state.SetPhase(Phase.Connected, "通道正常，可以使用 VNC／WinSCP");
-                }
-                else
-                {
-                    state.Log("本機沒有回應，等待中");
-                    state.SetPhase(Phase.Connecting, "已找到本機通道，等待本機回應…");
+                    if (at < 0)
+                    {
+                        if (line.Length == 0) return;
+                        // 本機沒開、RDP 斷線時 ft.exe 每秒重複這兩句：同一段期間只記一次
+                        string kind = line.IndexOf("Could not create file", StringComparison.Ordinal) >= 0 ? "create"
+                            : line.IndexOf("Could not enqueue", StringComparison.Ordinal) >= 0 ? "enqueue" : null;
+                        if (kind != null && !noise.Add(kind))
+                        {
+                            JumpLog.Throttled("ft-" + kind, "ft.exe（重複中）：" + line, 30); // 視窗不洗版，記錄檔每 30 秒留一筆
+                            return;
+                        }
+                        state.Log("ft.exe：" + line);
+                        return;
+                    }
+                    JumpLog.Throttled("ft-counterpart", "ft.exe：" + line, 30);
+                    string now = line.Substring(at + "Counterpart:".Length).Trim().Split(' ')[0];
+                    if (now == counterpart) return;
+                    counterpart = now;
+                    if (now == "Online")
+                    {
+                        noise.Clear();
+                        state.Log("本機已回應，通道接上");
+                    }
+                    else state.Log("本機沒有回應，等待中");
+                    show();
                 }
             };
             process.OutputDataReceived += onLine;
@@ -171,83 +217,72 @@ namespace UvncFtpJump
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             state.SetFt("執行中（PID " + process.Id + "）");
-            state.SetPhase(Phase.Connecting, "已找到本機通道，等待本機回應…");
             state.Log("ft.exe 啟動");
+            JumpLog.Write("ft.exe PID " + process.Id + " 參數：" + args);
+            lock (statusGate) show();
 
-            long unreadSince = -1;
-            int gone = 0;
-            string reason = null;
+            // 只看 \\tsclient 還在不在，給畫面顯示用；不會因此去動 ft.exe
+            string root = Path.GetPathRoot(shared);
+            long missingSince = -1;
+            long lastFileReport = -FileReportMs;
             while (!stopping && !process.HasExited)
             {
-                string content;
-                var markerState = ReadMarker(marker, out content);
-                if (markerState == MarkerState.Read)
+                bool visible = TimedDirectoryExists(root);
+                if (visible && clock.ElapsedMilliseconds - lastFileReport >= FileReportMs)
                 {
-                    if (content != session)
-                    {
-                        reason = "本機通道重新開啟過，換新的連線";
-                        break;
-                    }
-                    gone = 0;
-                    if (unreadSince >= 0)
-                    {
-                        unreadSince = -1;
-                        state.Log("RDP 已重新連線，通道繼續使用");
-                        state.SetTunnel("已找到（" + session + "）");
-                        state.SetPhase(counterpart == "Online" ? Phase.Connected : Phase.Connecting,
-                            counterpart == "Online" ? "通道正常，可以使用 VNC／WinSCP" : "已找到本機通道，等待本機回應…");
-                    }
+                    lastFileReport = clock.ElapsedMilliseconds;
+                    JumpLog.Write("共用檔：" + Timed(() => Describe(shared, "to-remote.dat") + "；" + Describe(shared, "to-local.dat"), "讀取逾時"));
                 }
-                else
+                lock (statusGate)
                 {
-                    // 標記檔不見、而 \\tsclient 本身還看得到：本機關掉了通道（mRemoteNG 關了）。
-                    // \\tsclient 也看不到（或讀取卡住）：RDP 斷線，ft.exe 照跑，連回來就接著用。
-                    if (markerState == MarkerState.Gone && TimedDirectoryExists(Path.GetPathRoot(shared)))
+                    if (visible)
                     {
-                        if (++gone >= 2)
+                        sawRedirection = true;
+                        missingSince = -1;
+                        if (rdpDown)
                         {
-                            reason = "本機已關閉通道";
-                            break;
+                            rdpDown = false;
+                            state.Log("RDP 已重新連線，通道繼續使用");
+                            show();
                         }
                     }
-                    else gone = 0;
-                    if (unreadSince < 0) unreadSince = clock.ElapsedMilliseconds;
-                    else if (clock.ElapsedMilliseconds - unreadSince >= ShowDisconnectedAfterMs && state.Take().Phase != Phase.Disconnected)
+                    else if (missingSince < 0) missingSince = clock.ElapsedMilliseconds;
+                    else if (!rdpDown && clock.ElapsedMilliseconds - missingSince >= ShowDisconnectedAfterMs)
                     {
-                        state.Log("看不到 \\\\tsclient（RDP 斷線），等待重新連線");
-                        state.SetTunnel("看不到 \\\\tsclient");
-                        state.SetPhase(Phase.Disconnected, "程式不會結束，連回來後自動接上");
+                        rdpDown = true;
+                        state.Log(sawRedirection
+                            ? "看不到 " + root + "（RDP 斷線），等待重新連線"
+                            : "看不到 " + root + "：請在 RDP 連線設定開啟「磁碟機」重新導向後重新連線");
+                        show();
                     }
                 }
-                Thread.Sleep(500);
+                Thread.Sleep(1000);
             }
 
-            bool exited = process.HasExited;
             lock (gate)
             {
                 job.Dispose();
                 if (currentJob == job) currentJob = null;
             }
             if (stopping) return;
-            if (exited)
-            {
-                string code;
-                try { code = process.ExitCode.ToString(); }
-                catch (InvalidOperationException) { code = "?"; }
-                state.Log("ft.exe 結束（代碼 " + code + "），2 秒後重新啟動");
-                state.SetFt("已結束（代碼 " + code + "）");
-                state.SetPhase(Phase.Error, "ft.exe 結束（代碼 " + code + "），2 秒後重新啟動");
-            }
-            else
-            {
-                state.Log(reason);
-                state.SetFt("已停止");
-            }
+            string code;
+            try { code = process.ExitCode.ToString(); }
+            catch (InvalidOperationException) { code = "?"; }
+            state.Log("ft.exe 結束（代碼 " + code + "），2 秒後重新啟動");
+            state.SetFt("已結束（代碼 " + code + "）");
+            state.SetPhase(Phase.Error, "ft.exe 結束（代碼 " + code + "），2 秒後重新啟動");
             process.Dispose();
             Thread.Sleep(2000);
         }
 
-        /// <summary>等本機的通道出現，回傳資料夾；關視窗時回 null。</summary>
+        /// <summary>共用檔的大小與修改時間（記錄用：看得出兩邊有沒有真的在寫）。</summary>
+        static string Describe(string folder, string name)
+        {
+            var info = new FileInfo(Path.Combine(folder, name));
+            return info.Exists ? name + " " + info.Length + " bytes，" + info.LastWriteTime.ToString("HH:mm:ss") : name + " 不存在";
+        }
+
+        /// <summary>沒有指定資料夾時：掃 \\tsclient 找本機的通道資料夾，回傳資料夾；關視窗時回 null。</summary>
         string WaitForLocalTunnel()
         {
             string lastStatus = null;
@@ -255,32 +290,27 @@ namespace UvncFtpJump
             {
                 string status;
                 Phase phase = Phase.WaitingLocal;
-                if (explicitPath != null)
+                Scan scan = TimedDirectoryExists(profiles) ? Timed(() => ScanTunnels(), null) : null;
+                if (scan == null)
                 {
-                    if (TimedFileExists(Path.Combine(explicitPath, "active.marker"))) return Found(explicitPath);
-                    if (TimedDirectoryExists(Path.GetPathRoot(explicitPath))) status = "等待本機通道：" + explicitPath;
-                    else
+                    if (sawRedirection)
                     {
-                        status = Missing(out phase);
+                        phase = Phase.Disconnected;
+                        status = "RDP 斷線";
                     }
+                    else status = "看不到 " + profiles + "：請在 RDP 連線設定開啟「磁碟機」重新導向後重新連線";
                 }
                 else
                 {
-                    Scan scan = TimedDirectoryExists(profiles) ? Timed(() => ScanTunnels(), null) : null;
-                    if (scan == null) status = Missing(out phase);
+                    sawRedirection = true;
+                    if (scan.Found.Count == 1) return scan.Found[0];
+                    if (scan.Found.Count > 1)
+                        status = "找到多個本機通道資料夾，請從 mRemoteNG 重新部署跳板通道";
+                    else if (scan.OtherRoutes.Count > 0)
+                        status = "只找到其他跳板的通道：" + string.Join("、", scan.OtherRoutes.ToArray()) +
+                                 "。如果其中一個就是這台，請用 --route 指定";
                     else
-                    {
-                        sawRedirection = true;
-                        missingSince = -1;
-                        if (scan.Found.Count == 1) return Found(scan.Found[0]);
-                        if (scan.Found.Count > 1)
-                            status = "找到多個本機通道，請關掉多餘的，或用 --route 指定";
-                        else if (scan.OtherRoutes.Count > 0)
-                            status = "只找到其他跳板的通道：" + string.Join("、", scan.OtherRoutes.ToArray()) +
-                                     "。如果其中一個就是這台，請用 --route 指定";
-                        else
-                            status = "請在本機 mRemoteNG 開啟經這台跳板的機台";
-                    }
+                        status = "請在本機 mRemoteNG 開啟經這台跳板的機台";
                 }
                 if (status != lastStatus)
                 {
@@ -293,26 +323,6 @@ namespace UvncFtpJump
                 Thread.Sleep(2000);
             }
             return null;
-        }
-
-        string Found(string folder)
-        {
-            sawRedirection = true;
-            missingSince = -1;
-            return folder;
-        }
-
-        /// <summary>\\tsclient 看不到：連上過就是 RDP 斷線，不然是沒開磁碟重新導向。</summary>
-        string Missing(out Phase phase)
-        {
-            if (sawRedirection)
-            {
-                if (missingSince < 0) missingSince = clock.ElapsedMilliseconds;
-                phase = Phase.Disconnected;
-                return "RDP 斷線";
-            }
-            phase = Phase.WaitingLocal;
-            return "看不到 " + (profiles ?? explicitPath) + "：請在 RDP 連線設定開啟「磁碟機」重新導向後重新連線";
         }
 
         sealed class Scan
@@ -329,23 +339,20 @@ namespace UvncFtpJump
             {
                 foreach (string user in Directory.GetDirectories(profiles))
                 {
-                    string bridgeTemp = Path.Combine(user, @"AppData\Local\Temp\UvncFtpBridge");
-                    // 單一通道（Start-FileTunnel.cmd）；有指定 --route 時不看
-                    if (routeArg == null)
-                    {
-                        string candidate = Path.Combine(bridgeTemp, "FileTunnel");
-                        try { if (File.Exists(Path.Combine(candidate, "active.marker"))) scan.Found.Add(candidate); }
-                        catch (IOException) { }
-                        catch (UnauthorizedAccessException) { }
-                    }
-                    // mRemoteNG 主機模式：每台跳板一個資料夾，用跳板的名稱或 IP 命名
-                    string routesDir = Path.Combine(bridgeTemp, RoutesFolderName);
+                    string bridgeTemp = Path.Combine(user, @"AppData\Local\Temp\" + BridgeFolderName);
                     try
                     {
+                        // 單一通道（Start-FileTunnel.cmd）；有指定 --route 時不看
+                        if (routeArg == null)
+                        {
+                            string candidate = Path.Combine(bridgeTemp, "FileTunnel");
+                            if (Directory.Exists(candidate)) scan.Found.Add(candidate);
+                        }
+                        // mRemoteNG 主機模式：每台跳板一個資料夾，用跳板的名稱或 IP 命名
+                        string routesDir = Path.Combine(bridgeTemp, RoutesFolderName);
                         if (!Directory.Exists(routesDir)) continue;
                         foreach (string routeDir in Directory.GetDirectories(routesDir))
                         {
-                            if (!File.Exists(Path.Combine(routeDir, "active.marker"))) continue;
                             string name = Path.GetFileName(routeDir);
                             if (identities.Contains(name)) scan.Found.Add(routeDir);
                             else scan.OtherRoutes.Add(name);
@@ -427,8 +434,8 @@ namespace UvncFtpJump
             return sb.ToString();
         }
 
-        // RDP 斷線時 \\tsclient 消失，讀它可能卡住很久（不會馬上報錯）。所以讀標記檔、檢查資料夾都丟到背景、限時 3 秒；
-        // 卡住就當作「讀不到」。同一時間只留一個卡住的讀取，不越積越多。
+        // RDP 斷線時 \\tsclient 消失，讀它可能卡住很久（不會馬上報錯）。所以檢查資料夾都丟到背景、限時 3 秒；
+        // 卡住就當作「看不到」。同一時間只留一個卡住的讀取，不越積越多。
         const int TsclientTimeoutMs = 3000;
         Task pendingIo;
 
@@ -448,38 +455,6 @@ namespace UvncFtpJump
         }
 
         bool TimedDirectoryExists(string path) => path != null && Timed(() => Directory.Exists(path), false);
-
-        bool TimedFileExists(string path) => Timed(() => File.Exists(path), false);
-
-        sealed class MarkerRead
-        {
-            public MarkerState State;
-            public string Content;
-        }
-
-        /// <summary>不鎖檔讀標記檔：本機端會一邊改寫、刪除它。</summary>
-        MarkerState ReadMarker(string path, out string content)
-        {
-            var result = Timed(() => ReadMarkerNow(path), new MarkerRead { State = MarkerState.Unknown });
-            content = result.Content;
-            return result.State;
-        }
-
-        static MarkerRead ReadMarkerNow(string path)
-        {
-            try
-            {
-                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (var reader = new StreamReader(stream))
-                {
-                    return new MarkerRead { State = MarkerState.Read, Content = reader.ReadToEnd().Trim() };
-                }
-            }
-            catch (FileNotFoundException) { return new MarkerRead { State = MarkerState.Gone }; }
-            catch (DirectoryNotFoundException) { return new MarkerRead { State = MarkerState.Gone }; }
-            catch (IOException) { return new MarkerRead { State = MarkerState.Unknown }; }
-            catch (UnauthorizedAccessException) { return new MarkerRead { State = MarkerState.Unknown }; }
-        }
     }
 
     /// <summary>跟 UvncFtpBridge 的 Route 一樣：通道名稱只允許英數字與 . - _。</summary>

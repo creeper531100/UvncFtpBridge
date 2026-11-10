@@ -166,8 +166,10 @@ public sealed class FtpSession(TcpClient control, FtpServer server)
         while (true)
         {
             try { return RfbConnection.Connect(host, vncPort, password, proxy: proxy); }
-            catch (VncException ex) when (ex.Message.StartsWith(Socks5Proxy.UnreachableMessage, StringComparison.Ordinal) && DateTime.UtcNow < deadline)
+            catch (VncException ex) when (Socks5Proxy.IsRetryable(ex) && DateTime.UtcNow < deadline)
             {
+                if (ex.Message.StartsWith(Socks5Proxy.NoReplyMessage, StringComparison.Ordinal))
+                    Log.Warn($"{ex.Message}。跳板通道可能剛重新連線，重新送出連線請求…");
                 Thread.Sleep(1000);
             }
         }

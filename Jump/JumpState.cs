@@ -45,7 +45,11 @@ namespace UvncFtpJump
         {
             lock (gate)
             {
-                if (newPhase != phase) phaseSince = clock.ElapsedMilliseconds;
+                if (newPhase != phase)
+                {
+                    phaseSince = clock.ElapsedMilliseconds;
+                    JumpLog.Write("狀態 → " + newPhase + "：" + newDetail);
+                }
                 phase = newPhase;
                 detail = newDetail ?? "";
                 revision++;
@@ -81,6 +85,7 @@ namespace UvncFtpJump
 
         public void Log(string message)
         {
+            JumpLog.Write(message);
             lock (gate)
             {
                 log.Add(DateTime.Now.ToString("HH:mm:ss") + "  " + message);

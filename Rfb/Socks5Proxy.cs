@@ -28,11 +28,43 @@ public sealed record Socks5Proxy(string Host, int Port)
         return new Socks5Proxy(uri.DnsSafeHost, uri.Port);
     }
 
+    /// <summary>
+    /// 代理收了連線卻沒有回覆（逾時或被關掉）時，VncException 訊息的開頭。
+    /// File-Tunnel 在請求送出的當下剛好重啟（RDP 重新連線、跳板端換 session）就會這樣：請求丟了，重送一次就好。
+    /// </summary>
+    public const string NoReplyMessage = "SOCKS5 代理沒有回應";
+
+    /// <summary>代理還沒開、或請求丟了：值得重試。代理明確回報連不到機台（回應碼）不算。</summary>
+    public static bool IsRetryable(Exception ex) =>
+        ex is VncException && (ex.Message.StartsWith(UnreachableMessage, StringComparison.Ordinal) ||
+                               ex.Message.StartsWith(NoReplyMessage, StringComparison.Ordinal));
+
     /// <summary>連上代理並要求它轉接到目標；成功返回後 tcp 收送的就是目標的資料。</summary>
     public void Connect(TcpClient tcp, string targetHost, int targetPort, int timeoutMs)
     {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        string where = $"埠 {Port} → {targetHost}:{targetPort}";
         RfbConnection.ConnectTcp(tcp, Host, Port, timeoutMs, $"{UnreachableMessage} {Host}:{Port}");
+        Log.Info($"SOCKS5 {where}：本機代理已接受（{clock.ElapsedMilliseconds} ms），送出請求");
+        string stage = "等本機代理交握";
+        try
+        {
+            Negotiate(tcp, targetHost, targetPort, timeoutMs, s => stage = s);
+            Log.Info($"SOCKS5 {where}：連上機台，共 {clock.ElapsedMilliseconds} ms");
+        }
+        catch (IOException ex)
+        {
+            throw new VncException($"{NoReplyMessage}（{targetHost}:{targetPort}，卡在「{stage}」，等了 {clock.ElapsedMilliseconds} ms）：{ex.Message}");
+        }
+        catch (VncException ex)
+        {
+            Log.Warn($"SOCKS5 {where}：{ex.Message}（{clock.ElapsedMilliseconds} ms）");
+            throw;
+        }
+    }
 
+    void Negotiate(TcpClient tcp, string targetHost, int targetPort, int timeoutMs, Action<string> stage)
+    {
         tcp.ReceiveTimeout = timeoutMs;
         tcp.SendTimeout = timeoutMs;
         var stream = tcp.GetStream();
@@ -41,6 +73,7 @@ public sealed record Socks5Proxy(string Host, int Port)
         stream.ReadExactly(method);
         if (method[0] != 5 || method[1] != 0)
             throw new VncException("SOCKS5 代理不接受免驗證連線。");
+        stage("等跳板回報連機台的結果");
 
         var request = new List<byte> { 5, 1, 0 }; // CONNECT
         if (IPAddress.TryParse(targetHost, out var ip))

@@ -36,6 +36,17 @@ namespace UvncFtpJump
 
             string error;
             var options = Options.Parse(args, out error);
+            string mirror = null;
+            if (options.Source != null && !SamePath(options.Source, own))
+            {
+                string deploy = Path.GetDirectoryName(options.Source.TrimEnd('\\'));
+                if (!string.IsNullOrEmpty(deploy)) mirror = Path.Combine(deploy, "jump-" + (options.Route ?? "default") + ".log");
+            }
+            JumpLog.Configure(own, mirror);
+            AppDomain.CurrentDomain.ProcessExit += (s, e) => JumpLog.Flush(1500);
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => { JumpLog.Write("未處理的例外：" + e.ExceptionObject); JumpLog.Flush(1500); };
+            JumpLog.Write("===== UvncFtpJump 啟動 PID " + Process.GetCurrentProcess().Id + "，工作階段 " + Process.GetCurrentProcess().SessionId +
+                          "，" + Environment.UserName + "，版本 " + File.GetLastWriteTime(self).ToString("yyyy-MM-dd HH:mm:ss") + "，參數：" + string.Join(" ", args));
             var state = new JumpState { Route = options.Route, Name = options.Name };
             if (error != null)
             {
@@ -61,18 +72,26 @@ namespace UvncFtpJump
             }
             bool needUpdate = updater != null && updater.NeedsUpdate;
 
+            // 通道資料夾：給了完整路徑就用它；start.bat 帶 --source、--route 時直接推出來（不用掃、不用等標記檔）
+            string folder = options.ExplicitPath;
+            if (folder == null && options.Source != null && !SamePath(options.Source, own))
+                folder = TunnelWorker.FolderFromSource(options.Source, options.Route);
+
             using (var mutex = new Mutex(false, MutexName))
             {
                 bool owned = TryAcquire(mutex, 0);
                 if (!owned)
                 {
-                    // 已經有一份在跑：沒有更新就完全不動它
-                    if (!needUpdate)
+                    // 已經有一份在跑：沒有更新、通道資料夾也一樣（同一台本機）就完全不動它
+                    bool moved = folder != null && !SamePath(folder, RunningFolder());
+                    JumpLog.Write("已有一份在跑：要更新=" + needUpdate + " " + versionNote + "，換本機=" + moved + "，這次資料夾=" + folder + "，正在用=" + RunningFolder());
+                    if (!needUpdate && !moved)
                     {
                         Report(options, own, "same");
+                        JumpLog.Flush(3000);
                         return 0;
                     }
-                    Report(options, own, "updating");
+                    if (needUpdate) Report(options, own, "updating");
                     owned = StopOthers(mutex, own);
                     if (!owned)
                     {
@@ -117,7 +136,7 @@ namespace UvncFtpJump
                             state.SetVersion(VersionText(self, "（更新失敗，用目前這份繼續）"));
                             form.BeginInvoke(new Action(() =>
                             {
-                                worker = StartWorker(state, own, options);
+                                worker = StartWorker(state, own, options, folder);
                                 WatchExit(form);
                             }));
                         }
@@ -127,7 +146,7 @@ namespace UvncFtpJump
                 {
                     form.Shown += (s, e) =>
                     {
-                        worker = StartWorker(state, own, options);
+                        worker = StartWorker(state, own, options, folder);
                         WatchExit(form);
                     };
                 }
@@ -143,11 +162,19 @@ namespace UvncFtpJump
             return 0;
         }
 
-        static TunnelWorker StartWorker(JumpState state, string own, Options options)
+        static TunnelWorker StartWorker(JumpState state, string own, Options options, string folder)
         {
-            var worker = new TunnelWorker(state, own, options.ExplicitPath, options.Profiles, options.Route);
+            var worker = new TunnelWorker(state, own, folder, options.Profiles, options.Route);
             worker.Start();
             return worker;
+        }
+
+        /// <summary>正在跑的那份用的通道資料夾（它自己記在 TunnelWorker.CurrentFolderFile）；讀不到回空字串。</summary>
+        static string RunningFolder()
+        {
+            try { return File.ReadAllText(TunnelWorker.CurrentFolderFile).Trim(); }
+            catch (IOException) { return ""; }
+            catch (UnauthorizedAccessException) { return ""; }
         }
 
         /// <summary>有新版的那一份叫這份結束（ExitEventName）：關視窗＝收掉 ft.exe、放掉 Mutex。</summary>
@@ -200,6 +227,7 @@ namespace UvncFtpJump
         /// </summary>
         static void Report(Options options, string own, string result)
         {
+            JumpLog.Write("回報 start.bat 結果：" + result);
             if (options.Source == null || SamePath(options.Source, own)) return;
             string folder = Path.GetDirectoryName(options.Source.TrimEnd('\\'));
             if (string.IsNullOrEmpty(folder)) return;
